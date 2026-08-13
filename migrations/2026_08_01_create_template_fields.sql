@@ -1,0 +1,15 @@
+CREATE TABLE IF NOT EXISTS template_fields (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    template_id INT NOT NULL,
+    field_key VARCHAR(64) NOT NULL,
+    x INT DEFAULT 0,
+    y INT DEFAULT 0,
+    width INT DEFAULT 140,
+    height INT DEFAULT 40,
+    visible TINYINT(1) DEFAULT 1,
+    font_size INT DEFAULT 12,
+    z_index INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_template_field (template_id, field_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

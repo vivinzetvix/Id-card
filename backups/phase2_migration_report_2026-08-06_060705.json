@@ -1,0 +1,58 @@
+{
+    "executed": [
+        "ALTER TABLE `template_fields` ADD COLUMN `text_align` ENUM('left','center','right') NOT NULL DEFAULT 'left' AFTER `color`",
+        "ALTER TABLE `template_input_fields` ADD COLUMN `default_value` TEXT NULL AFTER `placeholder`",
+        "ALTER TABLE `template_input_fields` ADD COLUMN `archived_at` TIMESTAMP NULL DEFAULT NULL AFTER `is_enabled`",
+        "ALTER TABLE `template_fields` ADD COLUMN `archived_at` TIMESTAMP NULL DEFAULT NULL AFTER `visible`",
+        "ALTER TABLE `audit_log` ADD COLUMN `organization_id` INT NULL DEFAULT NULL AFTER `user_id`",
+        "ALTER TABLE `audit_log` ADD KEY `idx_audit_organization` (`organization_id`)",
+        "ALTER TABLE `id_members` ADD KEY `idx_member_template` (`template_id`)",
+        "ALTER TABLE `id_members` ADD KEY `idx_member_deleted` (`deleted_at`)",
+        "ALTER TABLE `template_input_fields` ADD KEY `idx_tif_template_enabled` (`template_id`, `is_enabled`, `archived_at`)",
+        "ALTER TABLE `template_fields` ADD KEY `idx_tf_template_side` (`template_id`, `side`, `archived_at`)",
+        "ALTER TABLE `card_templates` ADD KEY `idx_template_org_status` (`organization_id`, `status`, `deleted_at`)",
+        "UPDATE audit_log SET organization_id FROM users (backfill)",
+        "UPDATE generated_cards SET organization_id FROM id_members (backfill)",
+        "INSERT IGNORE role_permissions for Super Admin",
+        "INSERT IGNORE role_permissions for Organization Admin",
+        "INSERT IGNORE role_permissions for Registrar",
+        "UPDATE roles SET status=0 WHERE Finace",
+        "VERIFY template_fields.text_align: OK",
+        "VERIFY template_input_fields.default_value: OK",
+        "VERIFY template_input_fields.archived_at: OK",
+        "VERIFY template_fields.archived_at: OK",
+        "VERIFY audit_log.organization_id: OK",
+        "VERIFY generated_cards.organization_id: OK",
+        "VERIFY index audit_log.idx_audit_organization: OK",
+        "VERIFY index id_members.idx_member_template: OK",
+        "VERIFY index id_members.idx_member_deleted: OK",
+        "VERIFY index template_input_fields.idx_tif_template_enabled: OK",
+        "VERIFY index template_fields.idx_tf_template_side: OK",
+        "VERIFY index card_templates.idx_template_org_status: OK"
+    ],
+    "skipped": [],
+    "added_columns": [
+        "template_fields.text_align",
+        "template_input_fields.default_value",
+        "template_input_fields.archived_at",
+        "template_fields.archived_at",
+        "audit_log.organization_id"
+    ],
+    "added_indexes": [
+        "audit_log.idx_audit_organization",
+        "id_members.idx_member_template",
+        "id_members.idx_member_deleted",
+        "template_input_fields.idx_tif_template_enabled",
+        "template_fields.idx_tf_template_side",
+        "card_templates.idx_template_org_status"
+    ],
+    "backfilled": [
+        "audit_log.organization_id \u2190 users: 118 row(s)",
+        "generated_cards.organization_id \u2190 id_members: 2 row(s) (NULL before=4, NULL after=2)",
+        "role_permissions Super Admin inserts attempted (affected\u22480)",
+        "role_permissions Organization Admin inserts attempted (affected\u22480)",
+        "role_permissions Registrar inserts attempted (affected\u22481)",
+        "roles Finace soft-deactivated: 1 row(s)"
+    ],
+    "errors": []
+}

@@ -1,0 +1,34 @@
+{
+    "inter": {
+        "normal": "E:\\New folder\\htdocs\\id\\id\\vendor\\dompdf\\dompdf\/lib\/fonts\/inter_normal_e2d7bc9d3d6153e4336863340620180f",
+        "500": "E:\\New folder\\htdocs\\id\\id\\vendor\\dompdf\\dompdf\/lib\/fonts\/inter_500_05b715ff11b9ea0ba2a1448a10f29ff2",
+        "600": "E:\\New folder\\htdocs\\id\\id\\vendor\\dompdf\\dompdf\/lib\/fonts\/inter_600_4df865495833fa00e7cf8dee1ff3f7e6",
+        "bold": "inter_bold_f7392d142bb27c071b9baee1a628075d"
+    },
+    "lato": {
+        "normal": "E:\\New folder\\htdocs\\id\\id\\vendor\\dompdf\\dompdf\/lib\/fonts\/lato_normal_ed3f4ee6166e4a8d875402747e6fb7a0",
+        "bold": "lato_bold_67cbea2936080f3d5601566280ed0b77"
+    },
+    "libre barcode 128": {
+        "normal": "libre_barcode_128_normal_56db619f164af9b32cff43dd824cd081"
+    },
+    "montserrat": {
+        "500": "E:\\New folder\\htdocs\\id\\id\\vendor\\dompdf\\dompdf\/lib\/fonts\/montserrat_500_2da570d656c67ef7297f2b0b288ce8bc",
+        "600": "E:\\New folder\\htdocs\\id\\id\\vendor\\dompdf\\dompdf\/lib\/fonts\/montserrat_600_da2f80af0e6d548904b08d3547b44b1c",
+        "bold": "montserrat_bold_251805f22f376c685d401bff71e8e1d4"
+    },
+    "playfair display": {
+        "600": "E:\\New folder\\htdocs\\id\\id\\vendor\\dompdf\\dompdf\/lib\/fonts\/playfair_display_600_555a1287914f9012e021a3b119eb30d7",
+        "bold": "playfair_display_bold_1e531eb7e3e1e9744697b9dd01c254b4"
+    },
+    "poppins": {
+        "500": "E:\\New folder\\htdocs\\id\\id\\vendor\\dompdf\\dompdf\/lib\/fonts\/poppins_500_2a496847b9018af565e71324a9cbc097",
+        "600": "E:\\New folder\\htdocs\\id\\id\\vendor\\dompdf\\dompdf\/lib\/fonts\/poppins_600_154dcc58b1e77916e556017f33cbcd2e",
+        "bold": "poppins_bold_c611dfa86762dbed0a7fd1e3d5f1a36c"
+    },
+    "roboto": {
+        "normal": "E:\\New folder\\htdocs\\id\\id\\vendor\\dompdf\\dompdf\/lib\/fonts\/roboto_normal_826b21c6e9e390acde75d9452fa9e59f",
+        "500": "E:\\New folder\\htdocs\\id\\id\\vendor\\dompdf\\dompdf\/lib\/fonts\/roboto_500_6c31329457813f7a8ebc5a352147fef5",
+        "bold": "roboto_bold_1a8c4a1acbd70e6f5947d46ac9a3bfc6"
+    }
+}

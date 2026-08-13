@@ -1,0 +1,3 @@
+ALTER TABLE id_members
+    MODIFY joined_date DATE NULL DEFAULT NULL,
+    MODIFY expiry_date DATE NULL DEFAULT NULL;
