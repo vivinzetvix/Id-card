@@ -1,0 +1,48 @@
+:root {
+    --org-primary: #0f172a;
+    --org-primary-soft: #eff6ff;
+    --org-accent: #2563eb;
+    --org-border: #e2e8f0;
+}
+
+body {
+    background: #f8fafc;
+}
+
+.main-card {
+    background: #fff;
+    border: 1px solid var(--org-border);
+    border-radius: 16px;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.page-header {
+    border-bottom: 1px solid var(--org-border);
+    padding-bottom: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.table thead th {
+    background: #f8fafc;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.logo-thumb {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 8px;
+    border: 1px solid var(--org-border);
+}
+
+.stat-card {
+    border: 1px solid var(--org-border);
+    border-radius: 14px;
+    background: linear-gradient(135deg, #fff 0%, #f8fbff 100%);
+}
+
+.breadcrumb-container {
+    margin-bottom: 1rem;
+}

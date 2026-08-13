@@ -1,0 +1,137 @@
+StartFontMetrics 4.1
+Notice Converted by PHP-font-lib
+Comment https://github.com/dompdf/php-font-lib
+EncodingScheme FontSpecific
+Copyright Copyright 2017-2020 The Libre Barcode Project Authors (https://github.com/graphicore/librebarcode)
+FontName Libre Barcode 128
+FontSubfamily Regular
+UniqueID 1.005;GRCR;LibreBarcode128-Regular
+FullName Libre Barcode 128 Regular
+Version Version 1.005; ttfautohint (v1.8.3)
+PostScriptName LibreBarcode128-Regular
+LicenseURL https://scripts.sil.org/OFL
+Weight Medium
+ItalicAngle 0
+IsFixedPitch false
+UnderlineThickness 50
+UnderlinePosition -75
+FontHeightOffset 0
+Ascender 600
+Descender -400
+FontBBox 0 -400 450 600
+StartCharMetrics 221
+U 0 ; WX 0 ; N NULL ; G 2
+U 13 ; WX 0 ; N CR ; G 1
+U 32 ; WX 330 ; N space ; G 110
+U 33 ; WX 330 ; N uni0021.code.exclam ; G 111
+U 34 ; WX 330 ; N uni0022.code.quotedbl ; G 112
+U 35 ; WX 330 ; N uni0023.code.numbersign ; G 113
+U 36 ; WX 330 ; N uni0024.code.dollar ; G 114
+U 37 ; WX 330 ; N uni0025.code.percent ; G 115
+U 38 ; WX 330 ; N uni0026.code.ampersand ; G 116
+U 39 ; WX 330 ; N uni0027.code.quotesingle ; G 117
+U 40 ; WX 330 ; N uni0028.code.parenleft ; G 118
+U 41 ; WX 330 ; N uni0029.code.parenright ; G 119
+U 42 ; WX 330 ; N uni002A.code.asterisk ; G 120
+U 43 ; WX 330 ; N uni002B.code.plus ; G 121
+U 44 ; WX 330 ; N uni002C.code.comma ; G 122
+U 45 ; WX 330 ; N uni002D.code.minus ; G 123
+U 46 ; WX 330 ; N uni002E.code.period ; G 124
+U 47 ; WX 330 ; N uni002F.code.slash ; G 125
+U 48 ; WX 330 ; N uni0030.code.zero ; G 126
+U 49 ; WX 330 ; N uni0031.code.one ; G 127
+U 50 ; WX 330 ; N uni0032.code.two ; G 128
+U 51 ; WX 330 ; N uni0033.code.three ; G 129
+U 52 ; WX 330 ; N uni0034.code.four ; G 130
+U 53 ; WX 330 ; N uni0035.code.five ; G 131
+U 54 ; WX 330 ; N uni0036.code.six ; G 132
+U 55 ; WX 330 ; N uni0037.code.seven ; G 133
+U 56 ; WX 330 ; N uni0038.code.eight ; G 134
+U 57 ; WX 330 ; N uni0039.code.nine ; G 135
+U 58 ; WX 330 ; N uni003A.code.colon ; G 136
+U 59 ; WX 330 ; N uni003B.code.semicolon ; G 137
+U 60 ; WX 330 ; N uni003C.code.less ; G 138
+U 61 ; WX 330 ; N uni003D.code.equal ; G 139
+U 62 ; WX 330 ; N uni003E.code.greater ; G 140
+U 63 ; WX 330 ; N uni003F.code.question ; G 141
+U 64 ; WX 330 ; N uni0040.code.at ; G 142
+U 65 ; WX 330 ; N uni0041.code.A ; G 143
+U 66 ; WX 330 ; N uni0042.code.B ; G 144
+U 67 ; WX 330 ; N uni0043.code.C ; G 145
+U 68 ; WX 330 ; N uni0044.code.D ; G 146
+U 69 ; WX 330 ; N uni0045.code.E ; G 147
+U 70 ; WX 330 ; N uni0046.code.F ; G 148
+U 71 ; WX 330 ; N uni0047.code.G ; G 149
+U 72 ; WX 330 ; N uni0048.code.H ; G 150
+U 73 ; WX 330 ; N uni0049.code.I ; G 151
+U 74 ; WX 330 ; N uni004A.code.J ; G 152
+U 75 ; WX 330 ; N uni004B.code.K ; G 153
+U 76 ; WX 330 ; N uni004C.code.L ; G 154
+U 77 ; WX 330 ; N uni004D.code.M ; G 155
+U 78 ; WX 330 ; N uni004E.code.N ; G 156
+U 79 ; WX 330 ; N uni004F.code.O ; G 157
+U 80 ; WX 330 ; N uni0050.code.P ; G 158
+U 81 ; WX 330 ; N uni0051.code.Q ; G 159
+U 82 ; WX 330 ; N uni0052.code.R ; G 160
+U 83 ; WX 330 ; N uni0053.code.S ; G 161
+U 84 ; WX 330 ; N uni0054.code.T ; G 162
+U 85 ; WX 330 ; N uni0055.code.U ; G 163
+U 86 ; WX 330 ; N uni0056.code.V ; G 164
+U 87 ; WX 330 ; N uni0057.code.W ; G 165
+U 88 ; WX 330 ; N uni0058.code.X ; G 166
+U 89 ; WX 330 ; N uni0059.code.Y ; G 167
+U 90 ; WX 330 ; N uni005A.code.Z ; G 168
+U 91 ; WX 330 ; N uni005B.code.bracketleft ; G 169
+U 92 ; WX 330 ; N uni005C.code.backslash ; G 170
+U 93 ; WX 330 ; N uni005D.code.bracketright ; G 171
+U 94 ; WX 330 ; N uni005E.code.asciicircum ; G 172
+U 95 ; WX 330 ; N uni005F.code.underscore ; G 173
+U 96 ; WX 330 ; N uni0060.code.grave ; G 174
+U 97 ; WX 330 ; N uni0061.code.a ; G 175
+U 98 ; WX 330 ; N uni0062.code.b ; G 176
+U 99 ; WX 330 ; N uni0063.code.c ; G 177
+U 100 ; WX 330 ; N uni0064.code.d ; G 178
+U 101 ; WX 330 ; N uni0065.code.e ; G 179
+U 102 ; WX 330 ; N uni0066.code.f ; G 180
+U 103 ; WX 330 ; N uni0067.code.g ; G 181
+U 104 ; WX 330 ; N uni0068.code.h ; G 182
+U 105 ; WX 330 ; N uni0069.code.i ; G 183
+U 106 ; WX 330 ; N uni006A.code.j ; G 184
+U 107 ; WX 330 ; N uni006B.code.k ; G 185
+U 108 ; WX 330 ; N uni006C.code.l ; G 186
+U 109 ; WX 330 ; N uni006D.code.m ; G 187
+U 110 ; WX 330 ; N uni006E.code.n ; G 188
+U 111 ; WX 330 ; N uni006F.code.o ; G 189
+U 112 ; WX 330 ; N uni0070.code.p ; G 190
+U 113 ; WX 330 ; N uni0071.code.q ; G 191
+U 114 ; WX 330 ; N uni0072.code.r ; G 192
+U 115 ; WX 330 ; N uni0073.code.s ; G 193
+U 116 ; WX 330 ; N uni0074.code.t ; G 194
+U 117 ; WX 330 ; N uni0075.code.u ; G 195
+U 118 ; WX 330 ; N uni0076.code.v ; G 196
+U 119 ; WX 330 ; N uni0077.code.w ; G 197
+U 120 ; WX 330 ; N uni0078.code.x ; G 198
+U 121 ; WX 330 ; N uni0079.code.y ; G 199
+U 122 ; WX 330 ; N uni007A.code.z ; G 200
+U 123 ; WX 330 ; N uni007B.code.braceleft ; G 201
+U 124 ; WX 330 ; N uni007C.code.bar ; G 202
+U 125 ; WX 330 ; N uni007D.code.braceright ; G 203
+U 126 ; WX 330 ; N uni007E.code.asciitilde ; G 204
+U 160 ; WX 330 ; N uni00A0 ; G 205
+U 194 ; WX 330 ; N uni00C2.code.space ; G 206
+U 195 ; WX 330 ; N uni00C3.code.DEL ; G 207
+U 196 ; WX 330 ; N uni00C4.code.FNC3 ; G 208
+U 197 ; WX 330 ; N uni00C5.code.FNC2 ; G 209
+U 198 ; WX 330 ; N uni00C6.code.ShiftA ; G 210
+U 199 ; WX 330 ; N uni00C7.code.CodeC ; G 211
+U 200 ; WX 330 ; N uni00C8.code.FNC4 ; G 212
+U 201 ; WX 330 ; N uni00C9.code.CodeA ; G 213
+U 202 ; WX 330 ; N uni00CA.code.FNC1 ; G 214
+U 203 ; WX 330 ; N uni00CB.code.StartCodeA ; G 215
+U 204 ; WX 330 ; N uni00CC.code.StartCodeB ; G 216
+U 205 ; WX 330 ; N uni00CD.code.StartCodeC ; G 217
+U 206 ; WX 390 ; N uni00CE.code.stoppattern ; G 218
+U 8203 ; WX 0 ; N zwspace ; G 220
+U 8204 ; WX 0 ; N zwnj ; G 219
+EndCharMetrics
+EndFontMetrics

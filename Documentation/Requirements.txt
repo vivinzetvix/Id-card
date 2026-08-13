@@ -1,0 +1,75 @@
+ID CARD MANAGEMENT SYSTEM - REQUIREMENTS
+========================================
+
+Last Updated: 23-Feb-2026
+
+1) SYSTEM REQUIREMENTS
+----------------------
+- Operating System: Windows / Linux / macOS
+- RAM: Minimum 4 GB (8 GB recommended)
+- Disk Space: Minimum 500 MB free space
+- Processor: Dual-core or higher
+
+2) SOFTWARE REQUIREMENTS
+------------------------
+- Web Server: Apache 2.4+ (or Nginx with PHP support)
+- PHP: 8.0 or higher
+- Database: MySQL 5.7+ or MariaDB 10.3+
+- Composer: 2.x
+- Browser: Latest Chrome / Edge / Firefox
+
+3) PHP EXTENSIONS REQUIRED
+--------------------------
+- pdo
+- pdo_mysql
+- mysqli
+- mbstring
+- json
+- gd
+- zip
+- fileinfo
+- openssl
+- dom
+
+4) PHP CONFIGURATION (RECOMMENDED)
+----------------------------------
+- memory_limit = 256M or higher
+- upload_max_filesize = 10M or higher
+- post_max_size = 20M or higher
+- max_execution_time = 120
+
+5) PROJECT DEPENDENCIES (COMPOSER)
+-----------------------------------
+Defined in composer.json and vendor/:
+- dompdf/dompdf
+- phpoffice/phpspreadsheet
+- maennchen/zipstream-php
+- masterminds/html5
+- sabberworm/php-css-parser
+
+Install with:
+composer install
+
+6) DIRECTORY REQUIREMENTS
+-------------------------
+These folders should exist and be writable:
+- images/uploads/
+- images/avatars/
+- saved_cards/
+- backups/
+
+7) DATABASE REQUIREMENTS
+------------------------
+- Create database (example: id)
+- Import base SQL:
+  id.sql
+- Apply migrations (if required):
+  migrations/2026_02_22_create_generated_cards.sql
+  migrations/2026_02_22_fix_member_date_columns.sql
+
+8) OPTIONAL (FOR BETTER EXPERIENCE)
+-----------------------------------
+- Internet connection for CDN resources used by UI/PDF preview
+  (Google Fonts, Font Awesome, html2pdf)
+
+END OF REQUIREMENTS

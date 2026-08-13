@@ -1,0 +1,152 @@
+ID CARD MANAGEMENT SYSTEM - FEATURES
+====================================
+
+Last Updated: 23-Feb-2026
+
+1) OVERVIEW
+-----------
+This system is a web-based ID Card Management platform used to:
+- Manage member records
+- Design and manage ID card templates
+- Generate, preview, print, and save ID cards
+- Track activities with audit logs
+- Produce reports and export data in bulk
+
+It is built with PHP + MySQL and supports modern browser-based usage.
+
+2) AUTHENTICATION & SESSION FEATURES
+------------------------------------
+- Secure login/logout flow (index.php, logout.php)
+- Session-based access control for protected pages
+- Password recovery flow (forgotpassword.php)
+- Profile management for authenticated users (profile.php)
+
+3) DASHBOARD & ANALYTICS
+------------------------
+Dashboard (dashboard.php) provides:
+- Total members count
+- Active members count
+- Expiring soon members (next 30 days)
+- Expired members count
+- New members added in current month
+- Template usage/download metrics
+- Recent members list
+- Upcoming expiration alerts
+- Class-wise member distribution
+- Monthly joining trend (6/12 month view)
+- Renewal rate indicator
+
+4) MEMBER MANAGEMENT FEATURES
+-----------------------------
+- Add member records manually (add_member.php)
+- View member details (view_member.php)
+- View full member listing (view_members.php)
+- Edit member records (edit_member.php / update_member.php)
+- Delete member records (delete_member.php)
+- Insert student/member flow (insert_student.php)
+- Upload and manage member photos
+- Support for key member fields such as:
+	- Name / ID number / Class / Department (based on schema)
+	- Joined date / Expiry date
+	- Contact and profile details
+
+5) BULK OPERATIONS
+------------------
+- Bulk member upload (bulk_upload.php)
+- Download bulk upload template file (download_template.php)
+- Bulk generate ID cards (bulk_generate_cards.php)
+- Bulk export generated cards (bulk_export_cards.php)
+- Export all member data (export_members.php)
+
+6) ID CARD GENERATION FEATURES
+------------------------------
+- Generate single ID card (generate_id_card.php)
+- Preview ID card before final output (preview_id_card.php, get_card_preview.php)
+- Save generated card designs/outputs (save_card.php)
+- View all generated cards (allid.php)
+- Print card directly (print_card.php)
+- Delete generated card entries (delete_card.php)
+- Maintain generated card repository (includes/generated_card_repository.php)
+- Storage of output cards in local `saved_cards/` directory
+
+7) TEMPLATE MANAGEMENT FEATURES
+-------------------------------
+- Template designer/manager interface (templates.php)
+- Built-in and custom template support
+- Card layout configuration (front/back as supported by template setup)
+- Reusable design blocks via includes (includes/id_card_design.php)
+- Template-level settings persistence via database tables
+
+8) REPORTING & AUDIT FEATURES
+-----------------------------
+- Reporting dashboard (reports.php)
+- Audit activity tracking (audit_log.php)
+- Historical action visibility for accountability
+- Expiry and operational monitoring support
+
+9) SETTINGS & SYSTEM CONFIGURATION
+----------------------------------
+- Global system settings page (settings.php)
+- Configurable timezone support (used in dashboard and date handling)
+- Configurable date format options (d/m/Y, m/d/Y, Y-m-d)
+- Member configuration include support (includes/member_config.php)
+- Central database/app configuration file (config.php)
+
+10) EXPORT, PRINT & DOCUMENT FEATURES
+-------------------------------------
+- PDF generation support via DOMPDF
+- Spreadsheet/Excel-compatible import/export via PhpSpreadsheet
+- Browser print-friendly card output
+- Template and member export workflows for admin operations
+
+11) MEDIA & FILE STORAGE FEATURES
+---------------------------------
+- Member upload image directory: images/uploads/
+- Avatar directory: images/avatars/
+- Generated/saved cards directory: saved_cards/
+- Backup directory: backups/
+- Existing SQL backup reference included in project
+
+12) DATABASE & MIGRATION FEATURES
+---------------------------------
+- Base database schema available (id.sql)
+- Incremental migration scripts available in migrations/
+- Date-column normalization/fix migration support
+- Generated cards table support through migration files
+
+13) UI/UX FEATURES
+------------------
+- Sidebar-based admin navigation (includes/sidebar.php)
+- Responsive layout for desktop and tablet/mobile widths
+- Icon-based menu and dashboard cards
+- Quick access to member, card, report, and settings modules
+- Integrated frontend scripts for card preview/canvas rendering
+
+14) TECHNOLOGY STACK
+--------------------
+- Backend: PHP 8+
+- Database: MySQL / MariaDB
+- Frontend: HTML, CSS, JavaScript
+- Key libraries:
+	- dompdf/dompdf
+	- phpoffice/phpspreadsheet
+	- html2canvas (frontend helper)
+
+15) ADMIN OPERATIONAL FEATURES
+------------------------------
+- Full admin-side lifecycle from member creation to card issuance
+- Record maintenance and cleanup options
+- Download/export support for institutional workflows
+- Basic operational traceability via logs and reports
+
+16) TYPICAL USER FLOW
+---------------------
+1. Admin logs in.
+2. Admin adds members (single or bulk).
+3. Admin configures/chooses ID template.
+4. Admin generates card(s).
+5. Admin previews and prints/downloads cards.
+6. Admin reviews reports and audit logs.
+7. Admin manages expirations and renewals.
+
+END OF FEATURES

@@ -1,0 +1,109 @@
+ID CARD MANAGEMENT SYSTEM - INSTALLATION GUIDE
+=============================================
+
+Last Updated: 23-Feb-2026
+
+1) REQUIREMENTS
+---------------
+- PHP 8.0 or higher
+- MySQL / MariaDB
+- Apache (XAMPP/WAMP/Laragon or any PHP web server)
+- Composer (for PHP dependencies)
+- Modern web browser (Chrome/Edge/Firefox)
+
+2) PROJECT SETUP
+----------------
+1. Copy this project folder to your web root.
+   Example (XAMPP):
+   e:\New folder\htdocs\id
+
+2. Open terminal in project folder and install dependencies:
+   composer install
+
+3) DATABASE SETUP
+-----------------
+1. Create a new database in MySQL, for example:
+   id
+
+2. Import base schema file:
+   id.sql
+
+3. Apply migration files (if not already included in id.sql):
+   migrations/2026_02_22_create_generated_cards.sql
+   migrations/2026_02_22_fix_member_date_columns.sql
+
+   You can run these from phpMyAdmin (Import tab) or MySQL CLI.
+
+4) APPLICATION CONFIGURATION
+----------------------------
+1. Open config.php
+2. Verify/update database credentials:
+   - Host
+   - Username
+   - Password
+   - Database name
+
+3. Save changes.
+
+5) FOLDER PERMISSIONS
+---------------------
+Ensure these folders are writable by the web server:
+- images/uploads/
+- images/avatars/
+- saved_cards/
+- backups/
+
+(Windows local setup usually works by default. For Linux, set appropriate chmod/chown.)
+
+6) RUN THE APPLICATION
+----------------------
+1. Start Apache and MySQL services.
+2. Open in browser:
+   http://localhost/id/id/
+
+3. Login from index.php page.
+
+Admin username : admin
+Admin Password : admin123
+
+
+
+7) OPTIONAL: COMPOSER AUTOLOAD REGENERATE
+------------------------------------------
+If class loading issues occur:
+   composer dump-autoload
+
+8) TROUBLESHOOTING
+------------------
+A) "Cannot modify header information" warning
+- Usually caused by output before header() calls.
+- Ensure PHP files do not echo/print before redirect headers.
+
+B) PDF/Print issues
+- Make sure internet is available for CDN JS/CSS (html2pdf/font-awesome/google fonts).
+- Try hard refresh (Ctrl + F5).
+
+C) Database connection failed
+- Recheck config.php credentials.
+- Confirm MySQL service is running.
+
+D) Missing vendor/autoload.php
+- Run: composer install
+
+9) IMPORTANT FILES
+------------------
+- index.php               -> Login page
+- dashboard.php           -> Dashboard
+- templates.php           -> Template management
+- print_card.php          -> Print / PDF output
+- config.php              -> DB and app configuration
+- id.sql                  -> Database schema/data
+
+10) BACKUP NOTE
+---------------
+A sample backup exists in:
+backups/backup_2026-02-23_110823.sql
+
+You can restore it using phpMyAdmin or MySQL CLI if needed.
+
+END OF GUIDE

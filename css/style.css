@@ -1,0 +1,57 @@
+body {
+    font-family: Arial, sans-serif;
+    background: #f4f4f4;
+    padding: 20px;
+    text-align: center;
+}
+form, table {
+    margin: auto;
+    padding: 20px;
+    background: #fff;
+    border-radius: 8px;
+}
+input, button {
+    padding: 10px;
+    margin: 10px;
+}
+.id-card {
+    border: 2px solid #333;
+    display: inline-block;
+    padding: 20px;
+    width: 300px;
+    text-align: center;
+}
+img {
+    border-radius: 50%;
+}
+.error {
+    color: red;
+}
+
+.user-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+    display: none;
+    min-width: 160px;
+    padding: 10px 0;
+    z-index: 999;
+}
+
+.user-dropdown.active {
+    display: block;
+}
+
+.user-dropdown a {
+    display: block;
+    padding: 8px 15px;
+    text-decoration: none;
+    color: #374151;
+}
+
+.user-dropdown a:hover {
+    background: #f3f4f6;
+}
