@@ -316,10 +316,12 @@ function view_template_orientation_icon(string $o): string {
         .card-preview-stage { display: flex; flex-direction: column; align-items: center; gap: 1.25rem; }
         .card-side-block { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; }
         .card-side-block .side-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--neutral-500); }
-       .card-frame {
-    transform: scale(0.55);
+.card-frame .id-card-renderer {
+    width: <?= $cardWidth ?>px !important;
+    height: <?= $cardHeight ?>px !important;
+    transform: scale(0.65);
     transform-origin: top center;
-    margin-bottom: -390px;
+    flex: 0 0 auto;
 }
         .preview-unavailable-box { width: 260px; height: 160px; display: flex; align-items: center; justify-content: center; background: var(--neutral-100); border-radius: var(--radius-md); color: var(--neutral-500); font-size: 0.8rem; text-align: center; padding: 1rem; }
 

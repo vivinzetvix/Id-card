@@ -1,6 +1,6 @@
 <?php
 /**
- * Users Management Module - User Listing Page
+ * Users Management Module - User Listing Page with Add/Edit Modals
  */
 session_start();
 require_once __DIR__ . '/../../config.php';
@@ -8,6 +8,286 @@ require_once __DIR__ . '/functions.php';
 
 $page_title = 'Users Management';
 $currentUser = require_user_module_access($pdo);
+
+// Handle AJAX requests
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
+    header('Content-Type: application/json');
+    
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'] ?? '', (string)$_POST['csrf_token'])) {
+        echo json_encode(['success' => false, 'message' => 'Invalid security token.']);
+        exit();
+    }
+    
+    $action = $_POST['ajax_action'];
+    $response = ['success' => false, 'message' => 'Invalid action'];
+    
+    if ($action === 'add' || $action === 'edit') {
+        $fullName = trim($_POST['full_name'] ?? '');
+        $username = trim($_POST['username'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $mobile = trim($_POST['mobile'] ?? '');
+        $organizationId = (int)($_POST['organization_id'] ?? 0);
+        $roleId = (int)($_POST['role_id'] ?? 0);
+        $status = ((string)($_POST['status'] ?? '0') === '1') ? 1 : 0;
+        $password = trim($_POST['password'] ?? '');
+        $confirmPassword = trim($_POST['confirm_password'] ?? '');
+        
+        $errors = [];
+        
+        if ($fullName === '') {
+            $errors[] = 'Full name is required.';
+        }
+        if ($username === '') {
+            $errors[] = 'Username is required.';
+        }
+        if ($roleId <= 0) {
+            $errors[] = 'Please select a role.';
+        }
+        
+        if ($action === 'add') {
+            if (strlen($password) < 6) {
+                $errors[] = 'Password must be at least 6 characters.';
+            }
+            if ($password !== $confirmPassword) {
+                $errors[] = 'Passwords do not match.';
+            }
+            
+            // Check if username already exists
+            $stmt = $pdo->prepare('SELECT id FROM users WHERE username = ? AND deleted_at IS NULL LIMIT 1');
+            $stmt->execute([$username]);
+            if ($stmt->fetch()) {
+                $errors[] = 'Username already exists.';
+            }
+            
+            if (!empty($email)) {
+                $stmt = $pdo->prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1');
+                $stmt->execute([$email]);
+                if ($stmt->fetch()) {
+                    $errors[] = 'Email already exists.';
+                }
+            }
+        } else {
+            $userId = (int)($_POST['user_id'] ?? 0);
+            if ($userId <= 0) {
+                $errors[] = 'Invalid user ID.';
+            } else {
+                // Check if username already exists (excluding current user)
+                $stmt = $pdo->prepare('SELECT id FROM users WHERE username = ? AND id != ? AND deleted_at IS NULL LIMIT 1');
+                $stmt->execute([$username, $userId]);
+                if ($stmt->fetch()) {
+                    $errors[] = 'Username already exists.';
+                }
+                
+                if (!empty($email)) {
+                    $stmt = $pdo->prepare('SELECT id FROM users WHERE email = ? AND id != ? AND deleted_at IS NULL LIMIT 1');
+                    $stmt->execute([$email, $userId]);
+                    if ($stmt->fetch()) {
+                        $errors[] = 'Email already exists.';
+                    }
+                }
+            }
+        }
+        
+        if (!empty($errors)) {
+            echo json_encode(['success' => false, 'message' => implode(' ', $errors)]);
+            exit();
+        }
+        
+        try {
+            // Handle avatar upload
+            $avatarPath = null;
+            if (!empty($_FILES['avatar']['name'])) {
+                $upload = upload_user_avatar($_FILES['avatar'], __DIR__ . '/assets/uploads/avatars');
+                if (!$upload['success']) {
+                    echo json_encode(['success' => false, 'message' => $upload['message']]);
+                    exit();
+                }
+                $avatarPath = $upload['file'];
+            }
+            
+            if ($action === 'add') {
+                $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+                $stmt = $pdo->prepare("INSERT INTO users (full_name, username, email, mobile, password, organization_id, role_id, status, avatar, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $stmt->execute([$fullName, $username, $email, $mobile, $hashedPassword, $organizationId, $roleId, $status, $avatarPath, get_current_user_id($pdo)]);
+                
+                log_user_activity($pdo, 'Created user', 'user', 'Created user ' . $username, $pdo->lastInsertId());
+                $response = ['success' => true, 'message' => 'User added successfully.', 'action' => 'add'];
+            } else {
+                $userId = (int)($_POST['user_id'] ?? 0);
+                $updateFields = [];
+                $params = [];
+                
+                $updateFields[] = 'full_name = ?';
+                $params[] = $fullName;
+                
+                $updateFields[] = 'username = ?';
+                $params[] = $username;
+                
+                $updateFields[] = 'email = ?';
+                $params[] = $email;
+                
+                $updateFields[] = 'mobile = ?';
+                $params[] = $mobile;
+                
+                $updateFields[] = 'organization_id = ?';
+                $params[] = $organizationId;
+                
+                $updateFields[] = 'role_id = ?';
+                $params[] = $roleId;
+                
+                $updateFields[] = 'status = ?';
+                $params[] = $status;
+                
+                if (!empty($password)) {
+                    if (strlen($password) < 6) {
+                        echo json_encode(['success' => false, 'message' => 'Password must be at least 6 characters.']);
+                        exit();
+                    }
+                    if ($password !== $confirmPassword) {
+                        echo json_encode(['success' => false, 'message' => 'Passwords do not match.']);
+                        exit();
+                    }
+                    $updateFields[] = 'password = ?';
+                    $params[] = password_hash($password, PASSWORD_DEFAULT);
+                }
+                
+                if ($avatarPath !== null) {
+                    $updateFields[] = 'avatar = ?';
+                    $params[] = $avatarPath;
+                }
+                
+                $params[] = $userId;
+                
+                $sql = 'UPDATE users SET ' . implode(', ', $updateFields) . ' WHERE id = ?';
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+                
+                log_user_activity($pdo, 'Updated user', 'user', 'Updated user ' . $username, $userId);
+                $response = ['success' => true, 'message' => 'User updated successfully.', 'action' => 'edit'];
+            }
+        } catch (PDOException $e) {
+            $response = ['success' => false, 'message' => 'Database error: ' . $e->getMessage()];
+        }
+        
+        echo json_encode($response);
+        exit();
+    } elseif ($action === 'get_user') {
+        $userId = (int)($_POST['user_id'] ?? 0);
+        if ($userId <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Invalid user ID.']);
+            exit();
+        }
+        
+        try {
+            $stmt = $pdo->prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL');
+            $stmt->execute([$userId]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($user) {
+                unset($user['password']);
+                $response = ['success' => true, 'data' => $user];
+            } else {
+                $response = ['success' => false, 'message' => 'User not found.'];
+            }
+        } catch (PDOException $e) {
+            $response = ['success' => false, 'message' => 'Database error: ' . $e->getMessage()];
+        }
+        
+        echo json_encode($response);
+        exit();
+    } elseif ($action === 'reset_password') {
+        $userId = (int)($_POST['user_id'] ?? 0);
+        $newPassword = trim($_POST['new_password'] ?? '');
+        if ($userId <= 0 || strlen($newPassword) < 6) {
+            echo json_encode(['success' => false, 'message' => 'Valid user ID and a password of at least 6 characters are required.']);
+            exit();
+        }
+        try {
+            $stmt = $pdo->prepare('SELECT username FROM users WHERE id = ? AND deleted_at IS NULL LIMIT 1');
+            $stmt->execute([$userId]);
+            $target = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$target) {
+                echo json_encode(['success' => false, 'message' => 'User not found.']);
+                exit();
+            }
+            $stmt = $pdo->prepare('UPDATE users SET password = ? WHERE id = ?');
+            $stmt->execute([password_hash($newPassword, PASSWORD_DEFAULT), $userId]);
+            log_user_activity($pdo, 'Reset user password', 'user', 'Reset password for ' . $target['username'], $userId);
+            $response = ['success' => true, 'message' => 'Password reset successfully.'];
+        } catch (PDOException $e) {
+            $response = ['success' => false, 'message' => 'Database error: ' . $e->getMessage()];
+        }
+        echo json_encode($response);
+        exit();
+    } elseif ($action === 'toggle_status') {
+        $userId = (int)($_POST['user_id'] ?? 0);
+        $currentStatus = ((string)($_POST['current_status'] ?? '0') === '1') ? 1 : 0;
+        if ($userId <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Invalid user ID.']);
+            exit();
+        }
+        try {
+            $stmt = $pdo->prepare('SELECT id, username, status, role_id FROM users WHERE id = ? AND deleted_at IS NULL LIMIT 1');
+            $stmt->execute([$userId]);
+            $target = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$target) {
+                echo json_encode(['success' => false, 'message' => 'User not found.']);
+                exit();
+            }
+            if ((int)$target['id'] === (int)$currentUser['id']) {
+                echo json_encode(['success' => false, 'message' => 'You cannot deactivate your own account.']);
+                exit();
+            }
+            if (is_super_admin($target)) {
+                echo json_encode(['success' => false, 'message' => 'Super Admin status cannot be changed.']);
+                exit();
+            }
+            $newStatus = $currentStatus === 1 ? 0 : 1;
+            $stmt = $pdo->prepare('UPDATE users SET status = ? WHERE id = ?');
+            $stmt->execute([$newStatus, $userId]);
+            $label = $newStatus === 1 ? 'activated' : 'deactivated';
+            log_user_activity($pdo, 'Changed user status', 'user', 'User ' . $target['username'] . ' ' . $label, $userId);
+            $response = ['success' => true, 'message' => 'User ' . $label . ' successfully.', 'new_status' => $newStatus];
+        } catch (PDOException $e) {
+            $response = ['success' => false, 'message' => 'Database error: ' . $e->getMessage()];
+        }
+        echo json_encode($response);
+        exit();
+    } elseif ($action === 'delete') {
+        $userId = (int)($_POST['user_id'] ?? 0);
+        if ($userId <= 0) {
+            echo json_encode(['success' => false, 'message' => 'Invalid user ID.']);
+            exit();
+        }
+        try {
+            $stmt = $pdo->prepare('SELECT id, username, role_id FROM users WHERE id = ? AND deleted_at IS NULL LIMIT 1');
+            $stmt->execute([$userId]);
+            $target = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$target) {
+                echo json_encode(['success' => false, 'message' => 'User not found.']);
+                exit();
+            }
+            if ((int)$target['id'] === (int)$currentUser['id']) {
+                echo json_encode(['success' => false, 'message' => 'You cannot delete your own account.']);
+                exit();
+            }
+            if (is_super_admin($target)) {
+                echo json_encode(['success' => false, 'message' => 'Super Admin cannot be deleted.']);
+                exit();
+            }
+            $stmt = $pdo->prepare('UPDATE users SET deleted_at = NOW() WHERE id = ?');
+            $stmt->execute([$userId]);
+            log_user_activity($pdo, 'Deleted user', 'user', 'Deleted user ' . $target['username'], $userId);
+            $response = ['success' => true, 'message' => 'User deleted successfully.'];
+        } catch (PDOException $e) {
+            $response = ['success' => false, 'message' => 'Database error: ' . $e->getMessage()];
+        }
+        echo json_encode($response);
+        exit();
+    }
+    
+    echo json_encode($response);
+    exit();
+}
 
 $search = trim($_GET['search'] ?? '');
 $orgFilter = trim($_GET['org_id'] ?? '');
@@ -66,6 +346,50 @@ function get_user_status_badge($status) {
     }
     return '<span class="status-badge inactive"><i class="fas fa-minus-circle"></i>Inactive</span>';
 }
+
+function get_current_user_id($pdo) {
+    return (int)($_SESSION['user_id'] ?? 0);
+}
+
+function log_user_activity($pdo, $action, $action_type, $details, $userId) {
+    $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+    $userAgent = $_SERVER['HTTP_USER_AGENT'] ?? null;
+    $stmt = $pdo->prepare("INSERT INTO audit_log (user_id, action, action_type, details, ip_address, user_agent) VALUES (?, ?, ?, ?, ?, ?)");
+    $stmt->execute([$userId, $action, $action_type, $details, $ip, $userAgent]);
+}
+
+function upload_user_avatar($file, $targetDir) {
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+        return ['success' => true, 'file' => null];
+    }
+    if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        return ['success' => false, 'message' => 'Avatar upload failed.'];
+    }
+    $maxBytes = 2 * 1024 * 1024;
+    if (($file['size'] ?? 0) > $maxBytes) {
+        return ['success' => false, 'message' => 'Avatar must be 2MB or smaller.'];
+    }
+    $tmp = (string)($file['tmp_name'] ?? '');
+    if ($tmp === '' || !is_uploaded_file($tmp)) {
+        return ['success' => false, 'message' => 'Invalid avatar upload.'];
+    }
+    $finfo = new finfo(FILEINFO_MIME_TYPE);
+    $mime = $finfo->file($tmp) ?: '';
+    $allowed = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
+    if (!isset($allowed[$mime])) {
+        return ['success' => false, 'message' => 'Invalid image type. Use JPG, PNG, or WEBP.'];
+    }
+    $ext = $allowed[$mime];
+    if (!is_dir($targetDir) && !mkdir($targetDir, 0755, true) && !is_dir($targetDir)) {
+        return ['success' => false, 'message' => 'Could not create upload directory.'];
+    }
+    $filename = 'avatar_' . date('YmdHis') . '_' . bin2hex(random_bytes(6)) . '.' . $ext;
+    $dest = $targetDir . '/' . $filename;
+    if (!move_uploaded_file($tmp, $dest)) {
+        return ['success' => false, 'message' => 'Failed to save avatar.'];
+    }
+    return ['success' => true, 'file' => $filename];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -74,479 +398,454 @@ function get_user_status_badge($status) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
     <title>Users Management · ID Card Generator</title>
 
-    <!-- Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&family=Poppins:wght@500;600;700&family=Roboto:wght@400;500;700&family=Lato:wght@400;700&family=Montserrat:wght@500;600;700&family=Playfair+Display:wght@600;700&family=Libre+Barcode+128&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
         :root {
             --primary: #0a1a2f;
             --primary-light: #1e3a5f;
             --primary-soft: #e8f0fe;
-            --accent: #e53e3e;
-            --accent-soft: #fee2e2;
             --success: #0e9f6e;
             --success-soft: #e3f9ee;
-            --warning: #f4b740;
+            --warning: #d97706;
             --warning-soft: #fef5e0;
             --danger: #dc2626;
             --danger-soft: #fee2e2;
             --info: #3b82f6;
             --info-soft: #dbeafe;
-            --neutral-50: #f9fafb;
-            --neutral-100: #f3f4f6;
-            --neutral-200: #e5e7eb;
-            --neutral-300: #d1d5db;
-            --neutral-400: #9ca3af;
-            --neutral-500: #6b7280;
-            --neutral-600: #4b5563;
-            --neutral-700: #374151;
-            --neutral-800: #1f2937;
-            --neutral-900: #111827;
-            
-            --shadow-sm: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.1);
-            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
-            --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
-            --shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
-            --shadow-2xl: 0 25px 50px -12px rgba(0,0,0,0.25);
-            
-            --radius-sm: 0.375rem;
-            --radius-md: 0.5rem;
-            --radius-lg: 0.75rem;
-            --radius-xl: 1rem;
-            --radius-2xl: 1.5rem;
-            --radius-3xl: 2rem;
+            --neutral-50: #f8fafc;
+            --neutral-100: #f1f5f9;
+            --neutral-200: #e2e8f0;
+            --neutral-300: #cbd5e1;
+            --neutral-400: #94a3b8;
+            --neutral-500: #64748b;
+            --neutral-600: #475569;
+            --neutral-700: #334155;
+            --neutral-800: #1e293b;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1);
+            --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1);
+            --shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1);
+            --radius: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 20px;
         }
+
+        * { box-sizing: border-box; }
 
         body {
-            font-family: 'Inter', sans-serif;
-            background: var(--neutral-50);
-            color: var(--neutral-800);
-            line-height: 1.5;
-        }
-
-        /* ===== LAYOUT ===== */
-        .dashboard-wrapper {
-            display: flex;
-            min-height: 100vh;
-        }
-
-        /* ----- Main Content ----- */
-        .main-content {
-            flex: 1;
-            margin-left: 280px;
-            min-height: 100vh;
-            background: var(--neutral-50);
-        }
-
-        /* ----- Top Header ----- */
-        .top-header {
-            background: white;
-            padding: 1rem 2rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            border-bottom: 1px solid var(--neutral-200);
-            position: sticky;
-            top: 0;
-            z-index: 40;
-            box-shadow: var(--shadow-sm);
-        }
-
-        .menu-toggle {
-            display: none;
-            font-size: 1.5rem;
-            color: var(--neutral-600);
-            cursor: pointer;
-            background: none;
-            border: none;
-            padding: 0.5rem;
-            border-radius: var(--radius-md);
-            transition: background 0.2s;
-        }
-
-        .menu-toggle:hover {
-            background: var(--neutral-100);
-        }
-
-        .page-title {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-
-        .page-title h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: var(--neutral-800);
-        }
-
-        .header-actions {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-
-        .notification-btn {
-            position: relative;
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: var(--neutral-100);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--neutral-600);
-            text-decoration: none;
-            transition: all 0.2s;
-        }
-
-        .notification-btn:hover {
-            background: var(--neutral-200);
-            color: var(--neutral-800);
-        }
-
-        .notification-badge {
-            position: absolute;
-            top: -2px;
-            right: -2px;
-            background: var(--accent);
-            color: white;
-            font-size: 0.75rem;
-            width: 18px;
-            height: 18px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .user-menu {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            padding: 0.5rem 0.75rem;
-            background: var(--neutral-100);
-            border-radius: var(--radius-lg);
-            cursor: pointer;
-            transition: all 0.2s;
-            position: relative;
-        }
-
-        .user-menu:hover {
-            background: var(--neutral-200);
-        }
-
-        .user-avatar {
-            width: 36px;
-            height: 36px;
-            background: var(--primary);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: 600;
-        }
-
-        .user-info {
-            line-height: 1.4;
-        }
-
-        .user-name {
-            font-weight: 600;
-            font-size: 0.875rem;
-        }
-
-        .user-role {
-            font-size: 0.75rem;
-            color: var(--neutral-500);
-        }
-
-        /* ----- Content Area ----- */
-        .content-area {
-            padding: 2rem;
-            max-width: 1600px;
-            margin: 0 auto;
-        }
-
-        /* Breadcrumb */
-        .breadcrumb-container {
-            background: transparent;
-            padding: 0 0 1.5rem 0;
-        }
-
-        .breadcrumb {
-            background: transparent;
-            padding: 0;
             margin: 0;
-            font-size: 0.875rem;
+            background: var(--neutral-50);
+            color: var(--neutral-800);
+            font-family: 'Inter', sans-serif;
         }
 
-        .breadcrumb-item a {
-            color: var(--primary);
-            text-decoration: none;
-            transition: color 0.2s;
-        }
+        .dashboard-wrapper { display: flex; min-height: 100vh; }
+        .main-content { flex: 1; margin-left: 280px; min-height: 100vh; }
+        .dashboard-content { max-width: 1600px; margin: 0 auto; padding: 28px; }
 
-        .breadcrumb-item a:hover {
-            color: var(--accent);
-        }
+        .breadcrumb-container { margin-bottom: 20px; }
+        .breadcrumb { margin: 0; font-size: .86rem; }
+        .breadcrumb a { text-decoration: none; color: var(--info); }
 
-        .breadcrumb-item.active {
-            color: var(--neutral-600);
-        }
-
-        .breadcrumb-item + .breadcrumb-item::before {
-            content: "›";
-            color: var(--neutral-400);
-        }
-
-        /* Alert Messages */
         .alert {
             display: flex;
             align-items: center;
-            gap: 1rem;
-            padding: 1rem 1.5rem;
-            border-radius: var(--radius-lg);
-            margin-bottom: 1.5rem;
-            animation: slideIn 0.3s ease;
-            border: none;
+            gap: 10px;
+            padding: 12px 16px;
+            border-radius: 10px;
+            margin-bottom: 16px;
         }
 
-        .alert-success {
-            background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
-            color: white;
-        }
-
-        .alert-danger {
-            background: linear-gradient(135deg, var(--danger) 0%, #b91c1c 100%);
-            color: white;
-        }
-
-        .alert i {
-            font-size: 1.25rem;
-        }
-
-        .alert-content {
-            flex: 1;
-        }
-
-        .alert .btn-close {
-            filter: brightness(0) invert(1);
-            background: none;
-            border: none;
-            font-size: 1.25rem;
-            cursor: pointer;
-            opacity: 0.7;
-            transition: opacity 0.2s;
-            padding: 0.25rem;
-        }
-
-        .alert .btn-close:hover {
-            opacity: 1;
-        }
-
-        /* Stats Cards */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
+            grid-template-columns: repeat(4, minmax(150px, 1fr));
+            gap: 14px;
+            margin-bottom: 18px;
         }
 
         .stat-card {
-            background: white;
-            border-radius: var(--radius-xl);
-            padding: 1.25rem 1.5rem;
-            box-shadow: var(--shadow-md);
+            background: #fff;
             border: 1px solid var(--neutral-200);
+            border-radius: 18px;
+            padding: 18px;
+            box-shadow: var(--shadow-sm);
+            transition: .2s ease;
+        }
+
+        .stat-card.clickable { cursor: pointer; }
+        .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+        .stat-label { font-size: .7rem; color: var(--neutral-500); text-transform: uppercase; letter-spacing: .05em; }
+        .stat-number { font-size: 1.7rem; font-weight: 700; }
+
+        .main-card {
+            background: #fff;
+            border: 1px solid var(--neutral-200);
+            border-radius: 18px;
+            overflow: hidden;
+            box-shadow: var(--shadow-md);
+        }
+
+        .card-header-custom {
+            padding: 20px;
+            background: #fff;
+            border-bottom: 1px solid var(--neutral-200);
+        }
+
+        .card-body-custom { padding: 20px; }
+        .card-footer-custom {
+            padding: 16px 20px;
+            background: var(--neutral-50);
+            border-top: 1px solid var(--neutral-200);
+        }
+
+        .quick-actions { gap: 8px; flex-wrap: wrap; }
+
+        /* Responsive filter bar
+           Desktop: keep all filters in one clean horizontal row.
+           Tablet: allow wrapping.
+           Mobile: stack controls vertically. */
+        .filter-bar {
+            width: 100%;
+            margin-top: 12px;
+        }
+
+        .filter-form {
             display: flex;
             align-items: center;
-            gap: 1rem;
-            transition: all 0.2s;
+            gap: 10px;
+            width: 100%;
+            flex-wrap: nowrap;
         }
 
-        .stat-card:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-lg);
+        .filter-form .filter-search {
+            flex: 1 1 auto;
+            min-width: 180px;
         }
 
-        .stat-card .stat-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: var(--radius-lg);
-            display: flex;
+        .filter-form .filter-select {
+            flex: 0 1 180px;
+            width: 180px;
+            min-width: 150px;
+        }
+
+        .filter-form .filter-btn,
+        .filter-form .filter-reset {
+            flex: 0 0 auto;
+            white-space: nowrap;
+        }
+
+        .filter-form .form-control,
+        .filter-form .form-select {
+            min-height: 40px;
+            height: 40px;
+            border-radius: 9px;
+            font-size: .82rem;
+            border: 1px solid var(--neutral-300);
+        }
+
+        @media (max-width: 1200px) {
+            .filter-form {
+                flex-wrap: wrap;
+            }
+
+            .filter-form .filter-search {
+                flex: 1 1 100%;
+                min-width: 0;
+            }
+
+            .filter-form .filter-select {
+                flex: 1 1 180px;
+                width: auto;
+            }
+        }
+
+        .table-wrap {
+            width: 100%;
+            overflow: auto;
+            border: 1px solid var(--neutral-200);
+            border-radius: 12px;
+        }
+
+        .table {
+            margin: 0;
+            min-width: 700px;
+            font-size: .8rem;
+        }
+
+        .table thead th {
+            background: var(--neutral-50);
+            color: var(--neutral-500);
+            font-size: .68rem;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            white-space: nowrap;
+            border-bottom: 2px solid var(--neutral-200);
+            padding: 11px 9px;
+            vertical-align: middle;
+        }
+
+        .table tbody td {
+            padding: 10px 9px;
+            border-bottom: 1px solid var(--neutral-100);
+            vertical-align: middle;
+        }
+
+        .table tbody tr:hover td { background: #fbfdff; }
+
+        .user-avatar-thumb {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--neutral-200);
+            background: var(--neutral-100);
+        }
+
+        .user-name {
+            font-weight: 700;
+            color: var(--neutral-800);
+            white-space: nowrap;
+        }
+
+        .muted { color: var(--neutral-500); }
+        .small-text { font-size: .72rem; }
+
+        .status-badge {
+            display: inline-flex;
             align-items: center;
-            justify-content: center;
-            font-size: 1.5rem;
-            flex-shrink: 0;
+            gap: 4px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            font-size: .66rem;
+            font-weight: 700;
+            white-space: nowrap;
+            background: #eef2f7;
+            color: #64748b;
         }
 
-        .stat-card .stat-icon.primary {
-            background: var(--primary-soft);
-            color: var(--primary);
-        }
+        .status-badge.active { background: #dcfce7; color: #15803d; }
+        .status-badge.inactive { background: #f1f5f9; color: #64748b; }
 
-        .stat-card .stat-icon.success {
-            background: var(--success-soft);
-            color: var(--success);
-        }
-
-        .stat-card .stat-icon.warning {
-            background: var(--warning-soft);
-            color: var(--warning);
-        }
-
-        .stat-card .stat-icon.info {
+        .badge-custom {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            font-size: .68rem;
+            font-weight: 600;
             background: var(--info-soft);
             color: var(--info);
         }
 
-        .stat-card .stat-details .stat-label {
-            font-size: 0.813rem;
-            color: var(--neutral-500);
-            margin-bottom: 0.25rem;
-        }
-
-        .stat-card .stat-details .stat-number {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: var(--neutral-800);
-        }
-
-        .stat-card .stat-details .stat-number.text-success {
-            color: var(--success);
-        }
-
-        .stat-card .stat-details .stat-number.text-secondary {
+        .badge-custom.bg-light {
+            background: var(--neutral-100);
             color: var(--neutral-600);
         }
 
-        /* Main Card */
-        .main-card {
-            background: white;
-            border-radius: var(--radius-2xl);
-            box-shadow: var(--shadow-md);
-            border: 1px solid var(--neutral-200);
-            overflow: hidden;
-        }
+        .empty-state { padding: 60px 20px; text-align: center; }
+        .empty-state i { font-size: 3rem; color: #cbd5e1; margin-bottom: 12px; }
+        .empty-state p { color: #64748b; }
 
-        .card-header-custom {
-            background: white;
-            padding: 1.25rem 1.5rem;
-            border-bottom: 1px solid var(--neutral-200);
-        }
-
-        .card-header-custom h5 {
-            font-size: 1.1rem;
-            font-weight: 600;
-            color: var(--neutral-800);
-            margin-bottom: 0.25rem;
-        }
-
-        .card-header-custom h5 i {
-            color: var(--primary);
-        }
-
-        .card-header-custom p {
-            color: var(--neutral-500);
-            font-size: 0.875rem;
-            margin-bottom: 0;
-        }
-
-        .card-body-custom {
+        .pagination-custom {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 5px;
+            flex-wrap: wrap;
+            list-style: none;
             padding: 0;
+            margin: 0;
         }
 
-        .card-footer-custom {
-            background: white;
-            padding: 0.75rem 1.5rem;
+        .pagination-custom a {
+            display: block;
+            padding: 6px 10px;
+            background: #fff;
+            border: 1px solid var(--neutral-200);
+            border-radius: 8px;
+            text-decoration: none;
+            color: var(--neutral-700);
+            font-size: .78rem;
+        }
+
+        .pagination-custom .active a {
+            background: var(--primary);
+            color: #fff;
+            border-color: var(--primary);
+        }
+
+        .btn-group-sm .btn { font-size: .75rem; padding: .3rem .5rem; }
+
+        /* Modal Styles */
+        .modal-content {
+            border: 0;
+            border-radius: 18px;
+            box-shadow: var(--shadow-xl);
+            max-height: 95vh;
+        }
+
+        .modal-header {
+            border-bottom: 1px solid var(--neutral-200);
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+            color: white;
+            border-radius: 18px 18px 0 0;
+            padding: 1.25rem 1.5rem;
+        }
+
+        .modal-header .btn-close {
+            filter: brightness(0) invert(1);
+        }
+
+        .modal-header h5 {
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .modal-body {
+            max-height: 70vh;
+            overflow-y: auto;
+            padding: 1.5rem;
+        }
+
+        .modal-footer {
             border-top: 1px solid var(--neutral-200);
+            padding: 1rem 1.5rem;
         }
 
-        /* Buttons */
+        .modal-form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .modal-form-item.full { grid-column: 1 / -1; }
+
+        .modal-form-item label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: .78rem;
+            font-weight: 700;
+            color: var(--neutral-700);
+            text-transform: uppercase;
+            letter-spacing: .03em;
+        }
+
+        .modal-form-item label .req { color: var(--danger); }
+
+        .modal-form-item .form-control,
+        .modal-form-item .form-select {
+            min-height: 42px;
+            border-radius: 9px;
+            font-size: .86rem;
+            border: 1px solid var(--neutral-300);
+        }
+
+        .modal-form-item .form-control:focus,
+        .modal-form-item .form-select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(10, 26, 47, .08);
+        }
+
+        .modal-form-item .form-control.is-invalid {
+            border-color: var(--danger);
+        }
+
+        .form-hint {
+            font-size: .72rem;
+            color: var(--neutral-500);
+            margin-top: 5px;
+        }
+
+        .avatar-upload-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .avatar-preview-box {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            overflow: hidden;
+            border: 3px solid var(--neutral-200);
+            background: var(--neutral-100);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 0.5rem;
+            transition: all 0.2s;
+        }
+
+        .avatar-preview-box:hover {
+            border-color: var(--primary);
+        }
+
+        .avatar-preview-box img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .avatar-upload-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.3rem 0.8rem;
+            border-radius: 8px;
+            font-size: .75rem;
+            font-weight: 500;
+            background: transparent;
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .avatar-upload-btn:hover {
+            background: var(--primary);
+            color: white;
+        }
+
         .btn {
             display: inline-flex;
             align-items: center;
             gap: 0.5rem;
-            padding: 0.625rem 1.25rem;
-            border-radius: var(--radius-lg);
-            font-weight: 500;
-            font-size: 0.9375rem;
+            padding: .6rem 1.1rem;
+            border-radius: 9px;
+            font-weight: 600;
+            font-size: .86rem;
             text-decoration: none;
-            transition: all 0.2s;
             border: none;
             cursor: pointer;
-            white-space: nowrap;
+            transition: .15s ease;
         }
 
         .btn-primary {
-            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
-            color: white;
-            box-shadow: var(--shadow-md);
+            background: var(--primary);
+            color: #fff;
         }
 
         .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-lg);
-            color: white;
-        }
-
-        .btn-outline-primary {
-            background: transparent;
-            border: 1px solid var(--primary);
-            color: var(--primary);
-        }
-
-        .btn-outline-primary:hover {
-            background: var(--primary);
-            color: white;
-            transform: translateY(-2px);
+            background: var(--primary-light);
+            color: #fff;
         }
 
         .btn-outline-secondary {
-            background: transparent;
+            background: #fff;
             border: 1px solid var(--neutral-300);
-            color: var(--neutral-600);
+            color: var(--neutral-700);
         }
 
         .btn-outline-secondary:hover {
             background: var(--neutral-100);
-            border-color: var(--neutral-400);
-            transform: translateY(-2px);
-            color: var(--neutral-800);
-        }
-
-        .btn-outline-info {
-            background: transparent;
-            border: 1px solid var(--info);
-            color: var(--info);
-        }
-
-        .btn-outline-info:hover {
-            background: var(--info);
-            color: white;
-            transform: translateY(-2px);
-        }
-
-        .btn-outline-warning {
-            background: transparent;
-            border: 1px solid var(--warning);
-            color: var(--warning);
-        }
-
-        .btn-outline-warning:hover {
-            background: var(--warning);
-            color: var(--neutral-900);
-            transform: translateY(-2px);
         }
 
         .btn-outline-danger {
@@ -557,1115 +856,963 @@ function get_user_status_badge($status) {
 
         .btn-outline-danger:hover {
             background: var(--danger);
-            color: white;
-            transform: translateY(-2px);
+            color: #fff;
         }
 
-        .btn-outline-dark {
+        .btn-outline-warning {
             background: transparent;
-            border: 1px solid var(--neutral-800);
-            color: var(--neutral-800);
+            border: 1px solid var(--warning);
+            color: var(--warning);
         }
 
-        .btn-outline-dark:hover {
-            background: var(--neutral-800);
-            color: white;
-            transform: translateY(-2px);
+        .btn-outline-warning:hover {
+            background: var(--warning);
+            color: #fff;
         }
 
-        .btn-sm {
-            padding: 0.4rem 0.75rem;
-            font-size: 0.813rem;
-        }
-
-        .btn-group-sm .btn {
-            padding: 0.3rem 0.6rem;
-            font-size: 0.75rem;
-        }
-
-        .btn.w-100 {
-            width: 100%;
-        }
-        .py-3 {
-            padding-top: 0.75rem;
-            padding-bottom: 0.75rem;
-        }
-        .shadow-sm {
-            box-shadow: var(--shadow-sm);
-        }
-
-        /* Status Badge */
-        .status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            padding: 0.35rem 0.85rem;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 500;
-        }
-
-        .status-badge.active {
-            background: var(--success-soft);
+        .btn-outline-success {
+            background: transparent;
+            border: 1px solid var(--success);
             color: var(--success);
         }
 
-        .status-badge.inactive {
-            background: var(--neutral-200);
-            color: var(--neutral-600);
+        .btn-outline-success:hover {
+            background: var(--success);
+            color: #fff;
         }
 
-        .status-badge i {
-            font-size: 0.625rem;
-        }
-
-        /* Badge */
-        .badge-custom {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            padding: 0.35rem 0.75rem;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 500;
-            background: var(--neutral-100);
-            color: var(--neutral-700);
-            border: 1px solid var(--neutral-200);
-        }
-
-        .badge-custom i {
-            font-size: 0.75rem;
-        }
-
-        .badge-custom.bg-info {
-            background: var(--info-soft);
+        .btn-outline-info {
+            background: transparent;
+            border: 1px solid var(--info);
             color: var(--info);
-            border-color: rgba(59, 130, 246, 0.25);
         }
 
-        .badge-custom.bg-light {
-            background: var(--neutral-100);
-            color: var(--neutral-600);
-            border-color: var(--neutral-200);
+        .btn-outline-info:hover {
+            background: var(--info);
+            color: #fff;
         }
 
-        /* User Avatar */
-        .user-avatar-thumb {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--neutral-200);
-            background: var(--neutral-100);
+        @media (max-width: 1200px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
 
-        /* Table */
-        .table-responsive {
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
+        @media (max-width: 992px) {
+            .main-content { margin-left: 0; }
+            .dashboard-content { padding: 16px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .modal-form-grid { grid-template-columns: 1fr; }
         }
 
-        .table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 0;
-        }
-
-        .table thead th {
-            text-align: left;
-            padding: 0.875rem 1rem;
-            font-size: 0.75rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--neutral-500);
-            background: var(--neutral-100);
-            border-bottom: 1px solid var(--neutral-200);
-            white-space: nowrap;
-        }
-
-        .table tbody td {
-            padding: 0.875rem 1rem;
-            border-bottom: 1px solid var(--neutral-200);
-            color: var(--neutral-600);
-            font-size: 0.875rem;
-            vertical-align: middle;
-        }
-
-        .table tbody tr:last-child td {
-            border-bottom: none;
-        }
-
-        .table tbody tr:hover td {
-            background: var(--neutral-50);
-        }
-
-        .table .ps-4 {
-            padding-left: 1.5rem;
-        }
-        .table .pe-4 {
-            padding-right: 1.5rem;
-        }
-        .table .text-end {
-            text-align: right;
-        }
-        .table .text-center {
-            text-align: center;
-        }
-
-        .fw-bold {
-            font-weight: 700;
-        }
-        .text-dark {
-            color: var(--neutral-800);
-        }
-        .text-muted {
-            color: var(--neutral-500);
-        }
-        .text-secondary {
-            color: var(--neutral-600);
-        }
-        .small {
-            font-size: 0.813rem;
-        }
-        .fst-italic {
-            font-style: italic;
-        }
-
-        /* Filter Form */
-        .filter-form {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .filter-form .input-group {
-            max-width: 200px;
-        }
-
-        .filter-form .input-group .input-group-text {
-            background: var(--neutral-100);
-            border: 1px solid var(--neutral-300);
-            border-right: none;
-            color: var(--neutral-500);
-            font-size: 0.813rem;
-            padding: 0.4rem 0.6rem;
-        }
-
-        .filter-form .input-group .form-control {
-            border: 1px solid var(--neutral-300);
-            border-left: none;
-            padding: 0.4rem 0.6rem;
-            font-size: 0.813rem;
-            border-radius: 0 var(--radius-md) var(--radius-md) 0;
-            background: white;
-            color: var(--neutral-800);
-            transition: all 0.2s;
-        }
-
-        .filter-form .input-group .form-control:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(10, 26, 47, 0.1);
-        }
-
-        .filter-form .form-select-sm {
-            padding: 0.4rem 2rem 0.4rem 0.6rem;
-            border: 1px solid var(--neutral-300);
-            border-radius: var(--radius-md);
-            font-size: 0.813rem;
-            background: white;
-            cursor: pointer;
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
-            background-position: right 0.5rem center;
-            background-repeat: no-repeat;
-            background-size: 1.25rem;
-            color: var(--neutral-700);
-            width: auto;
-            min-width: 130px;
-        }
-
-        .filter-form .form-select-sm:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(10, 26, 47, 0.1);
-        }
-
-        /* Pagination */
-        .pagination-custom {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 0.75rem;
-        }
-
-        .pagination-info {
-            color: var(--neutral-500);
-            font-size: 0.813rem;
-        }
-
-        .pagination-controls {
-            display: flex;
-            gap: 0.25rem;
-            flex-wrap: wrap;
-            list-style: none;
-            padding: 0;
-            margin: 0;
-        }
-
-        .pagination-controls .page-item {
-            display: inline-block;
-        }
-
-        .pagination-controls .page-link {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-width: 32px;
-            height: 32px;
-            padding: 0 0.6rem;
-            border: 1px solid var(--neutral-300);
-            border-radius: var(--radius-md);
-            background: white;
-            color: var(--neutral-600);
-            text-decoration: none;
-            transition: all 0.2s;
-            font-size: 0.813rem;
-        }
-
-        .pagination-controls .page-link:hover:not(.active):not(.disabled) {
-            background: var(--neutral-100);
-            border-color: var(--neutral-400);
-            transform: translateY(-2px);
-        }
-
-        .pagination-controls .page-item.active .page-link {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: white;
-        }
-
-        .pagination-controls .page-item.disabled .page-link {
-            opacity: 0.5;
-            pointer-events: none;
-        }
-
-        /* Modal */
-        .modal-content {
-            border-radius: var(--radius-2xl);
-            border: none;
-            box-shadow: var(--shadow-2xl);
-            overflow: hidden;
-        }
-
-        .modal-header {
-            padding: 1.25rem 1.5rem;
-            border-bottom: 1px solid var(--neutral-200);
-        }
-
-        .modal-header.bg-danger {
-            background: linear-gradient(135deg, var(--danger) 0%, #b91c1c 100%);
-            color: white;
-        }
-
-        .modal-header.bg-warning {
-            background: linear-gradient(135deg, var(--warning) 0%, #f59e0b 100%);
-            color: var(--neutral-900);
-        }
-
-        .modal-header .btn-close {
-            filter: brightness(0) invert(1);
-        }
-
-        .modal-header.bg-warning .btn-close {
-            filter: none;
-        }
-
-        .modal-body {
-            padding: 1.5rem;
-        }
-
-        .modal-footer {
-            padding: 1rem 1.5rem;
-            border-top: 1px solid var(--neutral-200);
-            display: flex;
-            gap: 0.75rem;
-            justify-content: flex-end;
-        }
-
-        .modal-footer .btn {
-            min-width: 80px;
-            justify-content: center;
-        }
-
-        .text-danger {
-            color: var(--danger);
-        }
-        .text-primary {
-            color: var(--primary);
-        }
-        .fs-6 {
-            font-size: 1rem;
-        }
-        .mb-0 {
-            margin-bottom: 0;
-        }
-        .mb-2 {
-            margin-bottom: 0.5rem;
-        }
-        .mb-3 {
-            margin-bottom: 1rem;
-        }
-        .me-1 {
-            margin-right: 0.25rem;
-        }
-        .me-2 {
-            margin-right: 0.5rem;
-        }
-        .me-3 {
-            margin-right: 1rem;
-        }
-        .mt-1 {
-            margin-top: 0.25rem;
-        }
-        .mt-3 {
-            margin-top: 1rem;
-        }
-        .mt-4 {
-            margin-top: 1.5rem;
-        }
-        .my-4 {
-            margin-top: 1.5rem;
-            margin-bottom: 1.5rem;
-        }
-        .gap-2 {
-            gap: 0.5rem;
-        }
-        .gap-3 {
-            gap: 1rem;
-        }
-
-        .d-flex {
-            display: flex;
-        }
-        .flex-column {
-            flex-direction: column;
-        }
-        .flex-md-row {
-            flex-direction: row;
-        }
-        .flex-wrap {
-            flex-wrap: wrap;
-        }
-        .justify-content-between {
-            justify-content: space-between;
-        }
-        .justify-content-center {
-            justify-content: center;
-        }
-        .align-items-center {
-            align-items: center;
-        }
-        .align-items-md-center {
-            align-items: center;
-        }
-
-        /* Row & Grid */
-        .row {
-            display: flex;
-            flex-wrap: wrap;
-            margin: 0 -0.75rem;
-        }
-
-        .col-md-3 {
-            flex: 0 0 25%;
-            max-width: 25%;
-            padding: 0 0.75rem;
-        }
-
-        .g-3 {
-            margin: -0.75rem;
-        }
-
-        .g-3 > [class*="col-"] {
-            padding: 0.75rem;
-        }
-
-        .container-fluid {
-            padding: 0 2rem;
-            width: 100%;
-        }
-
-        .py-4 {
-            padding-top: 1.5rem;
-            padding-bottom: 1.5rem;
-        }
-
-        /* Responsive */
-        @media (max-width: 1024px) {
-            .sidebar {
-                transform: translateX(-100%);
-                position: fixed;
-                top: 0;
-                left: 0;
-                bottom: 0;
-                z-index: 1000;
-                width: 280px;
-                background: var(--primary);
-                transition: transform 0.3s ease;
-                overflow-y: auto;
-            }
-
-            .sidebar.active {
-                transform: translateX(0);
-            }
-
-            .main-content {
-                margin-left: 0;
-            }
-
-            .menu-toggle {
-                display: block;
-            }
-
-            .col-md-3 {
-                flex: 0 0 50%;
-                max-width: 50%;
-            }
-        }
-
-        @media (max-width: 768px) {
-            .content-area {
-                padding: 1rem;
-            }
-
-            .container-fluid {
-                padding: 0 1rem;
-            }
-
-            .top-header {
-                padding: 0.75rem 1rem;
-            }
-
-            .user-info {
-                display: none;
-            }
-
-            .stats-grid {
-                grid-template-columns: 1fr 1fr;
-                gap: 0.75rem;
-            }
-
-            .stat-card {
-                padding: 1rem;
-            }
-
-            .stat-card .stat-icon {
-                width: 40px;
-                height: 40px;
-                font-size: 1.25rem;
-            }
-
-            .stat-card .stat-details .stat-number {
-                font-size: 1.25rem;
-            }
-
-            .card-header-custom {
-                padding: 1rem;
-            }
-
-            .card-footer-custom {
-                padding: 0.75rem 1rem;
-            }
+        @media (max-width: 600px) {
+            .stats-grid { grid-template-columns: 1fr; }
 
             .filter-form {
                 flex-direction: column;
                 align-items: stretch;
+                gap: 8px;
+            }
+
+            .filter-form .filter-search,
+            .filter-form .filter-select,
+            .filter-form .filter-btn,
+            .filter-form .filter-reset {
                 width: 100%;
+                min-width: 0;
+                flex: 1 1 auto;
             }
 
-            .filter-form .input-group {
-                max-width: 100%;
-            }
-
-            .filter-form .form-select-sm {
-                width: 100%;
-                min-width: unset;
-            }
-
-            .table thead th,
-            .table tbody td {
-                padding: 0.625rem 0.75rem;
-                font-size: 0.813rem;
-            }
-
-            .table .ps-4 {
-                padding-left: 0.75rem;
-            }
-            .table .pe-4 {
-                padding-right: 0.75rem;
-            }
-
-            .pagination-custom {
-                flex-direction: column;
-                align-items: center;
-                text-align: center;
-            }
-
-            .pagination-controls {
-                justify-content: center;
-            }
-
-            .modal-footer {
-                flex-direction: column;
-            }
-
-            .modal-footer .btn {
-                width: 100%;
-                justify-content: center;
-            }
-
-            .col-md-3 {
-                flex: 0 0 100%;
-                max-width: 100%;
-            }
-        }
-
-        @media (max-width: 480px) {
-            .content-area {
-                padding: 0.75rem;
-            }
-
-            .container-fluid {
-                padding: 0 0.75rem;
-            }
-
-            .stats-grid {
-                grid-template-columns: 1fr;
-                gap: 0.5rem;
-            }
-
-            .stat-card {
-                padding: 0.75rem 1rem;
-            }
-
-            .stat-card .stat-icon {
-                width: 36px;
-                height: 36px;
-                font-size: 1rem;
-            }
-
-            .stat-card .stat-details .stat-number {
-                font-size: 1.1rem;
-            }
-
-            .table {
-                font-size: 0.75rem;
-            }
-
-            .table thead th,
-            .table tbody td {
-                padding: 0.5rem 0.5rem;
-                font-size: 0.75rem;
-            }
-
-            .user-avatar-thumb {
-                width: 32px;
-                height: 32px;
-            }
-
-            .status-badge {
-                font-size: 0.625rem;
-                padding: 0.2rem 0.5rem;
-            }
-
-            .badge-custom {
-                font-size: 0.625rem;
-                padding: 0.2rem 0.5rem;
-            }
-
-            .btn-group-sm .btn {
-                padding: 0.2rem 0.4rem;
-                font-size: 0.7rem;
-            }
-
-            .btn {
-                padding: 0.5rem 0.75rem;
-                font-size: 0.813rem;
-            }
-
-            .page-head h1 {
-                font-size: 1.25rem;
-            }
-        }
-
-        @keyframes slideIn {
-            from {
-                transform: translateY(-20px);
-                opacity: 0;
-            }
-            to {
-                transform: translateY(0);
-                opacity: 1;
-            }
-        }
-
-        /* Print Styles */
-        @media print {
-            .sidebar,
-            .top-header,
-            .menu-toggle,
-            .header-actions,
-            .filter-form,
-            .btn,
-            .btn-group,
-            .pagination-controls,
-            .modal,
-            .alert .btn-close {
-                display: none !important;
-            }
-
-            .main-content {
-                margin-left: 0;
-                padding: 0;
-            }
-
-            .content-area {
-                padding: 0.5rem;
-            }
-
-            .main-card {
-                box-shadow: none;
-                border: 1px solid #ddd;
-            }
-
-            .table thead th {
-                background: #f5f5f5 !important;
-            }
-
-            .stat-card {
-                box-shadow: none;
-                border: 1px solid #ddd;
-            }
-
-            .breadcrumb-container {
-                display: none;
-            }
+            .modal-form-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
-    <div class="dashboard-wrapper">
-        <!-- Sidebar -->
-        <?php include __DIR__ . '/../../includes/sidebar.php'; ?>
+<div class="dashboard-wrapper">
 
-        <!-- Main Content -->
-        <main class="main-content">
-            <!-- Top Header -->
-            <?php include __DIR__ . '/../../includes/header.php'; ?>
+    <?php include __DIR__ . '/../../includes/sidebar.php'; ?>
 
-            <!-- Content Area -->
-            <div class="content-area">
-                <!-- Breadcrumb -->
-                <div class="breadcrumb-container">
-                    <nav aria-label="breadcrumb">
-                        <ol class="breadcrumb mb-0">
-                            <li class="breadcrumb-item"><a href="../../dashboard.php"><i class="fas fa-home me-1"></i>Dashboard</a></li>
-                            <li class="breadcrumb-item text-muted">Administration</li>
-                            <li class="breadcrumb-item active" aria-current="page">Users</li>
-                        </ol>
-                    </nav>
+    <main class="main-content">
+        <?php include __DIR__ . '/../../includes/header.php'; ?>
+
+        <div class="dashboard-content">
+
+            <div class="breadcrumb-container">
+                <nav aria-label="breadcrumb">
+                    <ol class="breadcrumb">
+                        <li class="breadcrumb-item">
+                            <a href="../../dashboard.php"><i class="fas fa-home me-1"></i>Dashboard</a>
+                        </li>
+                        <li class="breadcrumb-item active">Users</li>
+                    </ol>
+                </nav>
+            </div>
+
+            <div id="alert-container"></div>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Total Users</div>
+                    <div class="stat-number text-primary"><?= $totalCount ?></div>
                 </div>
-
-                <!-- Alert Notifications -->
-                <?php if (!empty($_SESSION['user_message'])): ?>
-                    <div class="alert alert-success alert-dismissible fade show" role="alert">
-                        <i class="fas fa-check-circle"></i>
-                        <div class="alert-content"><?= htmlspecialchars($_SESSION['user_message']) ?></div>
-                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close">&times;</button>
-                    </div>
-                    <?php unset($_SESSION['user_message']); ?>
-                <?php endif; ?>
-
-                <?php if (!empty($_SESSION['user_error'])): ?>
-                    <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                        <i class="fas fa-exclamation-circle"></i>
-                        <div class="alert-content"><?= htmlspecialchars($_SESSION['user_error']) ?></div>
-                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close">&times;</button>
-                    </div>
-                    <?php unset($_SESSION['user_error']); ?>
-                <?php endif; ?>
-
-                <!-- Stats Cards -->
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-icon primary">
-                            <i class="fas fa-users"></i>
-                        </div>
-                        <div class="stat-details">
-                            <div class="stat-label">Total Users</div>
-                            <div class="stat-number"><?= $totalCount ?></div>
-                        </div>
-                    </div>
-
-                    <div class="stat-card">
-                        <div class="stat-icon success">
-                            <i class="fas fa-user-check"></i>
-                        </div>
-                        <div class="stat-details">
-                            <div class="stat-label">Active Users</div>
-                            <div class="stat-number text-success"><?= $activeCount ?></div>
-                        </div>
-                    </div>
-
-                    <div class="stat-card">
-                        <div class="stat-icon warning">
-                            <i class="fas fa-user-slash"></i>
-                        </div>
-                        <div class="stat-details">
-                            <div class="stat-label">Inactive Users</div>
-                            <div class="stat-number text-secondary"><?= $inactiveCount ?></div>
-                        </div>
-                    </div>
-
-                    <div class="stat-card" style="cursor: pointer;" onclick="window.location.href='add.php'">
-                        <div class="stat-icon info">
-                            <i class="fas fa-user-plus"></i>
-                        </div>
-                        <div class="stat-details">
-                            <div class="stat-label">Quick Action</div>
-                            <div class="stat-number" style="font-size: 1rem; color: var(--primary);">Add New User</div>
-                        </div>
+                <div class="stat-card">
+                    <div class="stat-label">Active</div>
+                    <div class="stat-number text-success"><?= $activeCount ?></div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Inactive</div>
+                    <div class="stat-number" style="color:var(--neutral-500);"><?= $inactiveCount ?></div>
+                </div>
+                <div class="stat-card clickable" data-bs-toggle="modal" data-bs-target="#addUserModal">
+                    <div class="stat-label">Quick Action</div>
+                    <div class="stat-number" style="font-size:1rem;color:var(--primary);">
+                        <i class="fas fa-user-plus me-1"></i>Add User
                     </div>
                 </div>
+            </div>
 
-                <!-- Main Card -->
-                <div class="main-card">
-                    <div class="card-header-custom">
-                        <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
-                            <div>
-                                <h5><i class="fas fa-user-friends me-2"></i>User Directory</h5>
-                                <p>Manage system user accounts, assigned roles, and organizational permissions.</p>
-                            </div>
-                            <!-- Filters Form -->
-                            <form method="get" class="filter-form">
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="fas fa-search text-muted"></i></span>
-                                    <input type="text" name="search" class="form-control" placeholder="Search users..." value="<?= htmlspecialchars($search) ?>">
-                                </div>
+            <div class="main-card">
+                <div class="card-header-custom">
+                    <div class="d-flex flex-column flex-xl-row justify-content-between gap-3">
+                        <div>
+                            <h5 class="mb-1 fw-bold">
+                                <i class="fas fa-users text-primary me-2"></i>User Directory
+                            </h5>
+                            <div class="small muted">Manage system user accounts, roles, and permissions.</div>
+                        </div>
 
-                                <?php if (is_super_admin($currentUser)): ?>
-                                    <select name="org_id" class="form-select-sm">
-                                        <option value="">All Organizations</option>
-                                        <?php foreach ($scopedOrgs as $org): ?>
-                                            <option value="<?= (int)$org['id'] ?>" <?= $orgFilter === (string)$org['id'] ? 'selected' : '' ?>><?= htmlspecialchars($org['organization_name']) ?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                <?php endif; ?>
+                        <div class="quick-actions">
+                            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal">
+                                <i class="fas fa-user-plus me-1"></i>Add User
+                            </button>
+                        </div>
+                    </div>
 
-                                <select name="role_id" class="form-select-sm">
-                                    <option value="">All Roles</option>
-                                    <?php foreach ($scopedRoles as $r): ?>
-                                        <option value="<?= (int)$r['id'] ?>" <?= $roleFilter === (string)$r['id'] ? 'selected' : '' ?>><?= htmlspecialchars($r['role_name']) ?></option>
+                    <div class="filter-bar">
+                        <form method="get" class="filter-form">
+                            <input type="text" name="search" class="form-control filter-search" placeholder="Search users..."
+                                   value="<?= htmlspecialchars($search) ?>">
+
+                            <?php if (is_super_admin($currentUser)): ?>
+                                <select name="org_id" class="form-select filter-select">
+                                    <option value="">All Organizations</option>
+                                    <?php foreach ($scopedOrgs as $org): ?>
+                                        <option value="<?= (int)$org['id'] ?>" <?= $orgFilter === (string)$org['id'] ? 'selected' : '' ?>>
+                                            <?= htmlspecialchars($org['organization_name']) ?>
+                                        </option>
                                     <?php endforeach; ?>
                                 </select>
+                            <?php endif; ?>
 
-                                <select name="status" class="form-select-sm">
-                                    <option value="">All Statuses</option>
-                                    <option value="active" <?= $statusFilter === 'active' ? 'selected' : '' ?>>Active</option>
-                                    <option value="inactive" <?= $statusFilter === 'inactive' ? 'selected' : '' ?>>Inactive</option>
-                                </select>
+                            <select name="role_id" class="form-select filter-select">
+                                <option value="">All Roles</option>
+                                <?php foreach ($scopedRoles as $r): ?>
+                                    <option value="<?= (int)$r['id'] ?>" <?= $roleFilter === (string)$r['id'] ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars($r['role_name']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
 
-                                <button type="submit" class="btn btn-outline-primary btn-sm"><i class="fas fa-filter me-1"></i>Filter</button>
-                                <?php if ($search !== '' || $orgFilter !== '' || $roleFilter !== '' || $statusFilter !== ''): ?>
-                                    <a href="index.php" class="btn btn-outline-secondary btn-sm" title="Reset Filters"><i class="fas fa-redo"></i></a>
-                                <?php endif; ?>
-                            </form>
-                        </div>
+                            <select name="status" class="form-select filter-select">
+                                <option value="">All Statuses</option>
+                                <option value="active" <?= $statusFilter === 'active' ? 'selected' : '' ?>>Active</option>
+                                <option value="inactive" <?= $statusFilter === 'inactive' ? 'selected' : '' ?>>Inactive</option>
+                            </select>
+
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-filter me-1"></i>Filter
+                            </button>
+                            <?php if ($search !== '' || $orgFilter !== '' || $roleFilter !== '' || $statusFilter !== ''): ?>
+                                <a href="index.php" class="btn btn-outline-secondary filter-reset">
+                                    <i class="fas fa-rotate-left me-1"></i>Reset
+                                </a>
+                            <?php endif; ?>
+                        </form>
                     </div>
+                </div>
 
-                    <div class="card-body-custom">
-                        <div class="table-responsive">
-                            <table class="table">
-                                <thead>
+                <div class="card-body-custom">
+                    <div class="table-wrap">
+                        <table class="table" id="usersTable">
+                            <thead>
+                                <tr>
+                                    <th>Avatar</th>
+                                    <th>Full Name / Username</th>
+                                    <th>Organization</th>
+                                    <th>Role</th>
+                                    <th>Status</th>
+                                    <th>Last Login</th>
+                                    <th style="text-align:right;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if (empty($users)): ?>
                                     <tr>
-                                        <th class="ps-4" style="width: 60px;">Photo</th>
-                                        <th>Full Name / Username</th>
-                                        <th>Organization</th>
-                                        <th>Role</th>
-                                        <th>Status</th>
-                                        <th>Last Login</th>
-                                        <th class="text-end pe-4" style="width: 250px;">Actions</th>
+                                        <td colspan="7">
+                                            <div class="empty-state">
+                                                <i class="fas fa-users"></i>
+                                                <p>No users found matching your criteria.</p>
+                                                <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addUserModal">
+                                                    <i class="fas fa-user-plus me-1"></i>Add User
+                                                </button>
+                                            </div>
+                                        </td>
                                     </tr>
-                                </thead>
-                                <tbody>
-                                    <?php if (empty($users)): ?>
-                                        <tr>
-                                            <td colspan="7" class="text-center py-5 text-muted">
-                                                <i class="fas fa-user-slash fa-3x mb-3 text-secondary"></i>
-                                                <p class="mb-0">No users found matching your criteria.</p>
+                                <?php else: ?>
+                                    <?php foreach ($users as $u): ?>
+                                        <?php
+                                        $isSuper = is_super_admin($u) || (int)$u['id'] === 1;
+                                        $isSelf = ((int)$u['id'] === (int)$currentUser['id']);
+                                        ?>
+                                        <tr data-id="<?= (int)$u['id'] ?>">
+                                            <td>
+                                                <img src="<?= htmlspecialchars(get_user_avatar_path($u['avatar'] ?? '')) ?>"
+                                                     class="user-avatar-thumb" alt="Avatar">
+                                            </td>
+                                            <td>
+                                                <div class="user-name"><?= htmlspecialchars($u['full_name'] ?: $u['username']) ?></div>
+                                                <div class="small-text muted">@<?= htmlspecialchars($u['username']) ?></div>
+                                            </td>
+                                            <td>
+                                                <span class="badge-custom bg-light">
+                                                    <i class="fas fa-building me-1 text-primary"></i>
+                                                    <?= htmlspecialchars($u['organization_name'] ?: 'System Global') ?>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <span class="badge-custom">
+                                                    <i class="fas fa-user-shield me-1"></i>
+                                                    <?= htmlspecialchars($u['role_name'] ?: ucfirst($u['role'] ?? 'User')) ?>
+                                                </span>
+                                            </td>
+                                            <td class="status-cell"><?= get_user_status_badge((int)$u['status']) ?></td>
+                                            <td class="small muted">
+                                                <?= !empty($u['last_login']) ? date('M d, Y', strtotime($u['last_login'])) : 'Never' ?>
+                                            </td>
+                                            <td style="text-align:right;">
+                                                <div class="btn-group btn-group-sm">
+                                                    <a href="view.php?id=<?= (int)$u['id'] ?>" class="btn btn-outline-info" title="View">
+                                                        <i class="fas fa-eye"></i>
+                                                    </a>
+                                                    <button class="btn btn-outline-secondary edit-btn" title="Edit"
+                                                            data-id="<?= (int)$u['id'] ?>">
+                                                        <i class="fas fa-edit"></i>
+                                                    </button>
+                                                    <button class="btn btn-outline-warning reset-password-btn" title="Reset Password"
+                                                            data-id="<?= (int)$u['id'] ?>" data-username="<?= htmlspecialchars($u['username'], ENT_QUOTES) ?>">
+                                                        <i class="fas fa-key"></i>
+                                                    </button>
+                                                    <?php if (!$isSuper): ?>
+                                                        <button class="btn btn-outline-<?= (int)$u['status'] === 1 ? 'dark' : 'success' ?> toggle-status-btn"
+                                                                title="<?= (int)$u['status'] === 1 ? 'Deactivate' : 'Activate' ?>"
+                                                                data-id="<?= (int)$u['id'] ?>" data-status="<?= (int)$u['status'] ?>">
+                                                            <i class="fas fa-power-off"></i>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                    <?php if (!$isSuper && !$isSelf): ?>
+                                                        <button class="btn btn-outline-danger delete-btn" title="Delete"
+                                                                data-id="<?= (int)$u['id'] ?>" data-username="<?= htmlspecialchars($u['username'], ENT_QUOTES) ?>">
+                                                            <i class="fas fa-trash"></i>
+                                                        </button>
+                                                    <?php endif; ?>
+                                                </div>
                                             </td>
                                         </tr>
-                                    <?php else: ?>
-                                        <?php foreach ($users as $u): ?>
-                                            <?php
-                                            $isSuper = is_super_admin($u) || (int)$u['id'] === 1;
-                                            $isSelf = ((int)$u['id'] === (int)$currentUser['id']);
-                                            ?>
-                                            <tr>
-                                                <td class="ps-4">
-                                                    <img src="<?= htmlspecialchars(get_user_avatar_path($u['avatar'] ?? '')) ?>" class="user-avatar-thumb" alt="Avatar">
-                                                </td>
-                                                <td>
-                                                    <div class="fw-bold text-dark"><?= htmlspecialchars($u['full_name'] ?: $u['username']) ?></div>
-                                                    <div class="small text-muted">@<?= htmlspecialchars($u['username']) ?> &bull; <?= htmlspecialchars($u['email'] ?: 'No email') ?></div>
-                                                </td>
-                                                <td>
-                                                    <span class="badge-custom bg-light">
-                                                        <i class="fas fa-building me-1 text-primary"></i><?= htmlspecialchars($u['organization_name'] ?: 'System Global') ?>
-                                                    </span>
-                                                </td>
-                                                <td>
-                                                    <span class="badge-custom bg-info">
-                                                        <i class="fas fa-user-shield me-1"></i><?= htmlspecialchars($u['role_name'] ?: ucfirst($u['role'] ?? 'User')) ?>
-                                                    </span>
-                                                </td>
-                                                <td><?= get_user_status_badge((int)$u['status']) ?></td>
-                                                <td class="small text-muted">
-                                                    <?= !empty($u['last_login']) ? date('M d, Y g:i A', strtotime($u['last_login'])) : '<span class="fst-italic text-secondary">Never</span>' ?>
-                                                </td>
-                                                <td class="text-end pe-4">
-                                                    <div class="btn-group btn-group-sm" role="group">
-                                                        <a href="view.php?id=<?= (int)$u['id'] ?>" class="btn btn-outline-info" title="View Profile">
-                                                            <i class="fas fa-eye"></i>
-                                                        </a>
-                                                        <a href="edit.php?id=<?= (int)$u['id'] ?>" class="btn btn-outline-secondary" title="Edit User">
-                                                            <i class="fas fa-edit"></i>
-                                                        </a>
-                                                        <button type="button" class="btn btn-outline-warning" data-bs-toggle="modal" data-bs-target="#resetPasswordModal" data-id="<?= (int)$u['id'] ?>" data-username="<?= htmlspecialchars($u['username'], ENT_QUOTES) ?>" title="Reset Password">
-                                                            <i class="fas fa-key"></i>
-                                                        </button>
-
-                                                        <?php if (!$isSuper): ?>
-                                                            <a href="status.php?id=<?= (int)$u['id'] ?>&csrf_token=<?= htmlspecialchars(generate_csrf_token()) ?>" class="btn btn-outline-<?= (int)$u['status'] === 1 ? 'dark' : 'success' ?>" title="<?= (int)$u['status'] === 1 ? 'Deactivate User' : 'Activate User' ?>">
-                                                                <i class="fas fa-power-off"></i>
-                                                            </a>
-                                                        <?php else: ?>
-                                                            <button type="button" class="btn btn-outline-secondary" disabled title="Super Admin cannot be deactivated"><i class="fas fa-lock"></i></button>
-                                                        <?php endif; ?>
-
-                                                        <?php if (!$isSuper && !$isSelf): ?>
-                                                            <button type="button" class="btn btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteUserModal" data-id="<?= (int)$u['id'] ?>" data-username="<?= htmlspecialchars($u['username'], ENT_QUOTES) ?>" title="Delete User">
-                                                                <i class="fas fa-trash"></i>
-                                                            </button>
-                                                        <?php else: ?>
-                                                            <button type="button" class="btn btn-outline-secondary" disabled title="Protected Account"><i class="fas fa-trash"></i></button>
-                                                        <?php endif; ?>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        <?php endforeach; ?>
-                                    <?php endif; ?>
-                                </tbody>
-                            </table>
-                        </div>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
                     </div>
-
-                    <!-- Footer Pagination -->
-                    <?php if ($totalPages > 1): ?>
-                        <div class="card-footer-custom">
-                            <div class="pagination-custom">
-                                <div class="pagination-info">
-                                    Showing page <strong><?= $currentPage ?></strong> of <strong><?= $totalPages ?></strong> (Total: <?= $totalUsers ?> users)
-                                </div>
-                                <nav aria-label="User pagination">
-                                    <ul class="pagination-controls">
-                                        <li class="page-item <?= $currentPage <= 1 ? 'disabled' : '' ?>">
-                                            <a class="page-link" href="?page=<?= $currentPage - 1 ?>&search=<?= urlencode($search) ?>&org_id=<?= urlencode($orgFilter) ?>&role_id=<?= urlencode($roleFilter) ?>&status=<?= urlencode($statusFilter) ?>"><i class="fas fa-chevron-left"></i></a>
-                                        </li>
-                                        <?php for ($i = 1; $i <= $totalPages; $i++): ?>
-                                            <li class="page-item <?= $i === $currentPage ? 'active' : '' ?>">
-                                                <a class="page-link" href="?page=<?= $i ?>&search=<?= urlencode($search) ?>&org_id=<?= urlencode($orgFilter) ?>&role_id=<?= urlencode($roleFilter) ?>&status=<?= urlencode($statusFilter) ?>"><?= $i ?></a>
-                                            </li>
-                                        <?php endfor; ?>
-                                        <li class="page-item <?= $currentPage >= $totalPages ? 'disabled' : '' ?>">
-                                            <a class="page-link" href="?page=<?= $currentPage + 1 ?>&search=<?= urlencode($search) ?>&org_id=<?= urlencode($orgFilter) ?>&role_id=<?= urlencode($roleFilter) ?>&status=<?= urlencode($statusFilter) ?>"><i class="fas fa-chevron-right"></i></a>
-                                        </li>
-                                    </ul>
-                                </nav>
-                            </div>
-                        </div>
-                    <?php endif; ?>
                 </div>
+
+                <?php if ($totalPages > 1): ?>
+                    <div class="card-footer-custom">
+                        <ul class="pagination-custom">
+                            <?php for ($i = 1; $i <= $totalPages; $i++): ?>
+                                <li class="<?= $i === $currentPage ? 'active' : '' ?>">
+                                    <a href="?page=<?= $i ?>&search=<?= urlencode($search) ?>&org_id=<?= urlencode($orgFilter) ?>&role_id=<?= urlencode($roleFilter) ?>&status=<?= urlencode($statusFilter) ?>">
+                                        <?= $i ?>
+                                    </a>
+                                </li>
+                            <?php endfor; ?>
+                        </ul>
+                    </div>
+                <?php endif; ?>
             </div>
 
-            <?php include __DIR__ . '/../../includes/footer.php'; ?>
-        </main>
-    </div>
+        </div>
 
-    <!-- Modal Confirmation for User Delete -->
-    <div class="modal fade" id="deleteUserModal" tabindex="-1" aria-labelledby="deleteUserModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header bg-danger text-white">
-                    <h5 class="modal-title" id="deleteUserModalLabel"><i class="fas fa-user-slash me-2"></i>Delete User Account</h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+        <?php include __DIR__ . '/../../includes/footer.php'; ?>
+    </main>
+</div>
+
+<!-- ============================================ -->
+<!-- ADD USER MODAL -->
+<!-- ============================================ -->
+<div class="modal fade" id="addUserModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5><i class="fas fa-user-plus"></i> Add New User</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="addUserForm" enctype="multipart/form-data" novalidate>
+                <div class="modal-body">
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generate_csrf_token()) ?>">
+                    <input type="hidden" name="ajax_action" value="add">
+
+                    <div class="avatar-upload-container">
+                        <div class="avatar-preview-box">
+                            <img src="../../images/avatars/default.png" id="addAvatarPreview" alt="Avatar Preview">
+                        </div>
+                        <label for="addAvatar" class="avatar-upload-btn">
+                            <i class="fas fa-camera me-1"></i>Upload Photo
+                        </label>
+                        <input type="file" name="avatar" id="addAvatar" class="d-none" accept=".jpg,.jpeg,.png,.webp">
+                        <div class="form-hint">Allowed: JPG, PNG, WEBP (Max 2MB)</div>
+                    </div>
+
+                    <div class="modal-form-grid">
+                        <div class="modal-form-item">
+                            <label>Full Name <span class="req">*</span></label>
+                            <input type="text" class="form-control" name="full_name" required placeholder="e.g. John Doe">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Username <span class="req">*</span></label>
+                            <input type="text" class="form-control" name="username" required placeholder="e.g. johndoe">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Email</label>
+                            <input type="email" class="form-control" name="email" placeholder="john@example.com">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Mobile</label>
+                            <input type="text" class="form-control" name="mobile" placeholder="e.g. +1234567890">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Password <span class="req">*</span></label>
+                            <input type="password" class="form-control" name="password" required placeholder="Min 6 characters">
+                            <div class="form-hint">Password must be at least 6 characters.</div>
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Confirm Password <span class="req">*</span></label>
+                            <input type="password" class="form-control" name="confirm_password" required placeholder="Re-enter password">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Organization</label>
+                            <select name="organization_id" class="form-select" <?= !is_super_admin($currentUser) ? 'disabled' : '' ?>>
+                                <option value="">System Default</option>
+                                <?php foreach ($scopedOrgs as $org): ?>
+                                    <option value="<?= (int)$org['id'] ?>" <?= ($currentUser['organization_id'] ?? 0) == $org['id'] ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars($org['organization_name']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <?php if (!is_super_admin($currentUser)): ?>
+                                <input type="hidden" name="organization_id" value="<?= (int)($currentUser['organization_id'] ?? 0) ?>">
+                            <?php endif; ?>
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Role <span class="req">*</span></label>
+                            <select name="role_id" class="form-select" required>
+                                <option value="">Select Role</option>
+                                <?php foreach ($scopedRoles as $r): ?>
+                                    <option value="<?= (int)$r['id'] ?>"><?= htmlspecialchars($r['role_name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="modal-form-item full">
+                            <label>Status</label>
+                            <select name="status" class="form-select">
+                                <option value="1">Active</option>
+                                <option value="0">Inactive</option>
+                            </select>
+                            <div class="form-hint">Inactive users cannot log in.</div>
+                        </div>
+                    </div>
                 </div>
-                <form method="post" action="delete.php" id="deleteUserForm">
-                    <div class="modal-body">
-                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generate_csrf_token()) ?>">
-                        <input type="hidden" name="id" id="deleteUserId" value="">
-                        <p class="fs-6 mb-2">Are you sure you want to soft-delete user <strong id="deleteUsername" class="text-danger"></strong>?</p>
-                        <div id="deleteUserWarning" class="text-muted small"></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save me-1"></i>Save User
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================ -->
+<!-- EDIT USER MODAL -->
+<!-- ============================================ -->
+<div class="modal fade" id="editUserModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5><i class="fas fa-user-edit"></i> Edit User</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="editUserForm" enctype="multipart/form-data" novalidate>
+                <div class="modal-body">
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generate_csrf_token()) ?>">
+                    <input type="hidden" name="ajax_action" value="edit">
+                    <input type="hidden" name="user_id" id="editUserId" value="">
+
+                    <div class="avatar-upload-container">
+                        <div class="avatar-preview-box">
+                            <img src="../../images/avatars/default.png" id="editAvatarPreview" alt="Avatar Preview">
+                        </div>
+                        <label for="editAvatar" class="avatar-upload-btn">
+                            <i class="fas fa-camera me-1"></i>Change Photo
+                        </label>
+                        <input type="file" name="avatar" id="editAvatar" class="d-none" accept=".jpg,.jpeg,.png,.webp">
+                        <div class="form-hint">Leave empty to keep current. Allowed: JPG, PNG, WEBP (Max 2MB)</div>
+                        <div id="editCurrentAvatar" class="mt-2"></div>
                     </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-danger"><i class="fas fa-trash-alt me-1"></i>Delete User</button>
+
+                    <div class="modal-form-grid">
+                        <div class="modal-form-item">
+                            <label>Full Name <span class="req">*</span></label>
+                            <input type="text" class="form-control" name="full_name" id="editFullName" required placeholder="e.g. John Doe">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Username <span class="req">*</span></label>
+                            <input type="text" class="form-control" name="username" id="editUsername" required placeholder="e.g. johndoe">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Email</label>
+                            <input type="email" class="form-control" name="email" id="editEmail" placeholder="john@example.com">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Mobile</label>
+                            <input type="text" class="form-control" name="mobile" id="editMobile" placeholder="e.g. +1234567890">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>New Password</label>
+                            <input type="password" class="form-control" name="password" id="editPassword" placeholder="Leave empty to keep current">
+                            <div class="form-hint">Leave empty to keep current password.</div>
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Confirm Password</label>
+                            <input type="password" class="form-control" name="confirm_password" id="editConfirmPassword" placeholder="Re-enter new password">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Organization</label>
+                            <select name="organization_id" class="form-select" id="editOrganization" <?= !is_super_admin($currentUser) ? 'disabled' : '' ?>>
+                                <option value="">System Default</option>
+                                <?php foreach ($scopedOrgs as $org): ?>
+                                    <option value="<?= (int)$org['id'] ?>"><?= htmlspecialchars($org['organization_name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <?php if (!is_super_admin($currentUser)): ?>
+                                <input type="hidden" name="organization_id" value="<?= (int)($currentUser['organization_id'] ?? 0) ?>">
+                            <?php endif; ?>
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Role <span class="req">*</span></label>
+                            <select name="role_id" class="form-select" id="editRole" required>
+                                <option value="">Select Role</option>
+                                <?php foreach ($scopedRoles as $r): ?>
+                                    <option value="<?= (int)$r['id'] ?>"><?= htmlspecialchars($r['role_name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <div class="modal-form-item full">
+                            <label>Status</label>
+                            <select name="status" class="form-select" id="editStatus">
+                                <option value="1">Active</option>
+                                <option value="0">Inactive</option>
+                            </select>
+                            <div class="form-hint">Inactive users cannot log in.</div>
+                        </div>
                     </div>
-                </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save me-1"></i>Update User
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================ -->
+<!-- RESET PASSWORD MODAL -->
+<!-- ============================================ -->
+<div class="modal fade" id="resetPasswordModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header" style="background: linear-gradient(135deg, var(--warning) 0%, #f59e0b 100%);">
+                <h5><i class="fas fa-key"></i> Reset Password</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="resetPasswordForm">
+                <div class="modal-body">
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generate_csrf_token()) ?>">
+                    <input type="hidden" name="ajax_action" value="reset_password">
+                    <input type="hidden" name="user_id" id="resetUserId" value="">
+                    <p>Reset password for: <strong id="resetUsername" class="text-primary"></strong></p>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">New Password <span class="text-danger">*</span></label>
+                        <div class="input-group">
+                            <input type="text" name="new_password" id="newPassword" class="form-control" placeholder="Enter new password..." required minlength="6">
+                            <button type="button" class="btn btn-outline-secondary" id="generatePasswordBtn" title="Generate Secure Password">
+                                <i class="fas fa-random"></i> Generate
+                            </button>
+                        </div>
+                        <div class="form-hint">Password must be at least 6 characters.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-warning">
+                        <i class="fas fa-save me-1"></i>Save Password
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================ -->
+<!-- DELETE CONFIRMATION MODAL -->
+<!-- ============================================ -->
+<div class="modal fade" id="deleteUserModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header" style="background: linear-gradient(135deg, var(--danger) 0%, #b91c1c 100%);">
+                <h5><i class="fas fa-user-slash"></i> Delete User</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="csrf_token" id="deleteCsrfToken" value="<?= htmlspecialchars(generate_csrf_token()) ?>">
+                <input type="hidden" name="user_id" id="deleteUserId" value="">
+                <p>Are you sure you want to delete user <strong id="deleteUsername" class="text-danger"></strong>?</p>
+                <p class="text-muted small mb-0">This will soft-delete the user account and prevent them from logging in.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmDeleteBtn">
+                    <i class="fas fa-trash-alt me-1"></i>Delete User
+                </button>
             </div>
         </div>
     </div>
+</div>
 
-    <!-- Modal for Reset Password -->
-    <div class="modal fade" id="resetPasswordModal" tabindex="-1" aria-labelledby="resetPasswordModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header bg-warning text-dark">
-                    <h5 class="modal-title" id="resetPasswordModalLabel"><i class="fas fa-key me-2"></i>Reset User Password</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <form action="reset_password.php" method="post">
-                    <div class="modal-body">
-                        <input type="hidden" name="id" id="resetUserId">
-                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generate_csrf_token()) ?>">
-                        <p>Reset password for user: <strong id="resetUsername" class="text-primary"></strong></p>
-                        <div class="mb-3">
-                            <label for="new_password" class="form-label fw-semibold">New Password <span class="text-danger">*</span></label>
-                            <div class="input-group">
-                                <input type="text" name="new_password" id="new_password" class="form-control" placeholder="Enter new password..." required>
-                                <button type="button" class="btn btn-outline-secondary" id="btnGeneratePassword" title="Generate Secure Password"><i class="fas fa-random me-1"></i>Auto Generate</button>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-warning"><i class="fas fa-save me-1"></i>Save Password</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
-    <!-- Bootstrap JS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(function() {
+    'use strict';
 
-    <script>
-        // Mobile menu toggle
-        document.getElementById('menuToggle')?.addEventListener('click', function() {
-            document.querySelector('.sidebar').classList.toggle('active');
-        });
+    // ============================================
+    // HELPER FUNCTIONS
+    // ============================================
 
-        // Close sidebar when clicking outside on mobile
-        document.addEventListener('click', function(event) {
-            const sidebar = document.querySelector('.sidebar');
-            const menuToggle = document.getElementById('menuToggle');
-            
-            if (window.innerWidth <= 1024) {
-                if (sidebar && menuToggle && !sidebar.contains(event.target) && !menuToggle.contains(event.target)) {
-                    sidebar.classList.remove('active');
-                }
-            }
-        });
-
-        // Delete User Modal
-        document.addEventListener('DOMContentLoaded', function() {
-            const deleteModal = document.getElementById('deleteUserModal');
-            if (deleteModal) {
-                deleteModal.addEventListener('show.bs.modal', function(event) {
-                    const button = event.relatedTarget;
-                    const userId = button.getAttribute('data-id');
-                    const username = button.getAttribute('data-username');
-
-                    document.getElementById('deleteUserId').value = userId;
-                    document.getElementById('deleteUsername').textContent = username;
-                });
-            }
-
-            // Reset Password Modal
-            const resetModal = document.getElementById('resetPasswordModal');
-            if (resetModal) {
-                resetModal.addEventListener('show.bs.modal', function(event) {
-                    const button = event.relatedTarget;
-                    const userId = button.getAttribute('data-id');
-                    const username = button.getAttribute('data-username');
-
-                    document.getElementById('resetUserId').value = userId;
-                    document.getElementById('resetUsername').textContent = username;
-                });
-            }
-
-            // Generate Password
-            document.getElementById('btnGeneratePassword')?.addEventListener('click', function() {
-                const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
-                let password = '';
-                for (let i = 0; i < 12; i++) {
-                    password += chars.charAt(Math.floor(Math.random() * chars.length));
-                }
-                document.getElementById('new_password').value = password;
-            });
-        });
-
-        // Auto-dismiss alerts after 5 seconds
+    function showAlert(message, type = 'success') {
+        const container = document.getElementById('alert-container');
+        const alert = document.createElement('div');
+        alert.className = `alert alert-${type} alert-dismissible fade show`;
+        alert.innerHTML = `
+            <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'} me-2"></i>
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        container.appendChild(alert);
         setTimeout(() => {
-            document.querySelectorAll('.alert').forEach(alert => {
-                alert.style.transition = 'opacity 0.5s';
-                alert.style.opacity = '0';
-                setTimeout(() => alert.remove(), 500);
-            });
+            alert.style.transition = 'opacity 0.5s';
+            alert.style.opacity = '0';
+            setTimeout(() => alert.remove(), 500);
         }, 5000);
+    }
 
-        // Keyboard shortcuts
-        document.addEventListener('keydown', function(e) {
-            // Escape to close mobile menu
-            if (e.key === 'Escape' && window.innerWidth <= 1024) {
-                document.querySelector('.sidebar')?.classList.remove('active');
-            }
-
-            // Ctrl/Cmd + F to focus search
-            if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-                e.preventDefault();
-                document.querySelector('input[name="search"]')?.focus();
-            }
-
-            // Ctrl/Cmd + N to add new user
-            if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
-                e.preventDefault();
-                window.location.href = 'add.php';
-            }
+    function ajaxRequest(formData, callback) {
+        fetch('index.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (callback) callback(data);
+        })
+        .catch(error => {
+            showAlert('An error occurred: ' + error.message, 'danger');
         });
+    }
 
-        // Auto-submit on filter change
-        document.querySelectorAll('.filter-form select').forEach(select => {
-            select.addEventListener('change', function() {
-                this.closest('form').submit();
-            });
-        });
+    // ============================================
+    // AVATAR PREVIEW
+    // ============================================
 
-        // Touch-friendly improvements
-        if ('ontouchstart' in window) {
-            document.querySelectorAll('.btn, .page-link, .form-control, .form-select').forEach(el => {
-                el.addEventListener('touchstart', function() {
-                    this.style.opacity = '0.8';
-                });
-                el.addEventListener('touchend', function() {
-                    this.style.opacity = '1';
-                });
-            });
+    document.getElementById('addAvatar')?.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById('addAvatarPreview').src = e.target.result;
+            };
+            reader.readAsDataURL(file);
         }
-    </script>
+    });
+
+    document.getElementById('editAvatar')?.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById('editAvatarPreview').src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+    });
+
+    // ============================================
+    // ADD USER
+    // ============================================
+
+    const addForm = document.getElementById('addUserForm');
+    if (addForm) {
+        addForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(this);
+            const submitBtn = this.querySelector('button[type="submit"]');
+            const originalText = submitBtn.innerHTML;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Saving...';
+            submitBtn.disabled = true;
+
+            ajaxRequest(formData, function(data) {
+                submitBtn.innerHTML = originalText;
+                submitBtn.disabled = false;
+
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('addUserModal'));
+                    modal.hide();
+                    addForm.reset();
+                    document.getElementById('addAvatarPreview').src = '../../images/avatars/default.png';
+                    setTimeout(() => window.location.reload(), 1000);
+                } else {
+                    showAlert(data.message, 'danger');
+                }
+            });
+        });
+    }
+
+    // ============================================
+    // EDIT USER
+    // ============================================
+
+    const editModal = document.getElementById('editUserModal');
+    let editModalInstance = null;
+
+    document.querySelectorAll('.edit-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const userId = this.getAttribute('data-id');
+
+            if (!editModalInstance) {
+                editModalInstance = new bootstrap.Modal(editModal);
+            }
+
+            const form = document.getElementById('editUserForm');
+            const submitBtn = form.querySelector('button[type="submit"]');
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Loading...';
+            submitBtn.disabled = true;
+
+            const formData = new FormData();
+            formData.append('ajax_action', 'get_user');
+            formData.append('user_id', userId);
+            formData.append('csrf_token', document.querySelector('input[name="csrf_token"]').value);
+
+            ajaxRequest(formData, function(data) {
+                if (data.success) {
+                    const user = data.data;
+                    document.getElementById('editUserId').value = user.id;
+                    document.getElementById('editFullName').value = user.full_name || '';
+                    document.getElementById('editUsername').value = user.username || '';
+                    document.getElementById('editEmail').value = user.email || '';
+                    document.getElementById('editMobile').value = user.mobile || '';
+                    document.getElementById('editStatus').value = user.status || 1;
+
+                    // Set organization
+                    const orgSelect = document.getElementById('editOrganization');
+                    if (orgSelect) {
+                        orgSelect.value = user.organization_id || '';
+                    }
+
+                    // Set role
+                    const roleSelect = document.getElementById('editRole');
+                    if (roleSelect) {
+                        roleSelect.value = user.role_id || '';
+                    }
+
+                    // Show current avatar
+                    const avatarContainer = document.getElementById('editCurrentAvatar');
+                    if (user.avatar) {
+                        avatarContainer.innerHTML = `
+                            <div class="d-flex align-items-center gap-2 mt-2">
+                                <img src="assets/uploads/avatars/${user.avatar}" 
+                                     class="user-avatar-thumb" alt="Current Avatar"
+                                     style="width:50px;height:50px;">
+                                <span class="small muted">Current photo</span>
+                            </div>
+                        `;
+                        document.getElementById('editAvatarPreview').src = 'assets/uploads/avatars/' + user.avatar;
+                    } else {
+                        avatarContainer.innerHTML = '';
+                        document.getElementById('editAvatarPreview').src = '../../images/avatars/default.png';
+                    }
+
+                    submitBtn.innerHTML = '<i class="fas fa-save me-1"></i>Update User';
+                    submitBtn.disabled = false;
+
+                    editModalInstance.show();
+                } else {
+                    showAlert(data.message, 'danger');
+                }
+            });
+        });
+    });
+
+    const editForm = document.getElementById('editUserForm');
+    if (editForm) {
+        editForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(this);
+            const submitBtn = this.querySelector('button[type="submit"]');
+            const originalText = submitBtn.innerHTML;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Updating...';
+            submitBtn.disabled = true;
+
+            ajaxRequest(formData, function(data) {
+                submitBtn.innerHTML = originalText;
+                submitBtn.disabled = false;
+
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('editUserModal'));
+                    modal.hide();
+                    setTimeout(() => window.location.reload(), 1000);
+                } else {
+                    showAlert(data.message, 'danger');
+                }
+            });
+        });
+    }
+
+    // ============================================
+    // RESET PASSWORD
+    // ============================================
+
+    const resetModal = document.getElementById('resetPasswordModal');
+    let resetModalInstance = null;
+
+    document.querySelectorAll('.reset-password-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const userId = this.getAttribute('data-id');
+            const username = this.getAttribute('data-username');
+
+            if (!resetModalInstance) {
+                resetModalInstance = new bootstrap.Modal(resetModal);
+            }
+
+            document.getElementById('resetUserId').value = userId;
+            document.getElementById('resetUsername').textContent = username;
+            document.getElementById('newPassword').value = '';
+            resetModalInstance.show();
+        });
+    });
+
+    document.getElementById('generatePasswordBtn')?.addEventListener('click', function() {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
+        let password = '';
+        for (let i = 0; i < 12; i++) {
+            password += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        document.getElementById('newPassword').value = password;
+    });
+
+    document.getElementById('resetPasswordForm')?.addEventListener('submit', function(e) {
+        e.preventDefault();
+
+        const formData = new FormData(this);
+        const submitBtn = this.querySelector('button[type="submit"]');
+        const originalText = submitBtn.innerHTML;
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Saving...';
+        submitBtn.disabled = true;
+
+        ajaxRequest(formData, function(data) {
+            submitBtn.innerHTML = originalText;
+            submitBtn.disabled = false;
+
+            if (data.success) {
+                showAlert(data.message, 'success');
+                const modal = bootstrap.Modal.getInstance(document.getElementById('resetPasswordModal'));
+                modal.hide();
+            } else {
+                showAlert(data.message, 'danger');
+            }
+        });
+    });
+
+    // ============================================
+    // DELETE USER
+    // ============================================
+
+    const deleteModal = document.getElementById('deleteUserModal');
+    let deleteModalInstance = null;
+
+    document.querySelectorAll('.delete-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const userId = this.getAttribute('data-id');
+            const username = this.getAttribute('data-username');
+
+            if (!deleteModalInstance) {
+                deleteModalInstance = new bootstrap.Modal(deleteModal);
+            }
+
+            document.getElementById('deleteUserId').value = userId;
+            document.getElementById('deleteUsername').textContent = username;
+            deleteModalInstance.show();
+        });
+    });
+
+    document.getElementById('confirmDeleteBtn')?.addEventListener('click', function() {
+        const userId = document.getElementById('deleteUserId').value;
+        const token = document.getElementById('deleteCsrfToken').value;
+
+        this.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Deleting...';
+        this.disabled = true;
+
+        const formData = new FormData();
+        formData.append('ajax_action', 'delete');
+        formData.append('user_id', userId);
+        formData.append('csrf_token', token);
+
+        ajaxRequest(formData, function(data) {
+            document.getElementById('confirmDeleteBtn').innerHTML = '<i class="fas fa-trash-alt me-1"></i>Delete User';
+            document.getElementById('confirmDeleteBtn').disabled = false;
+
+            if (data.success) {
+                showAlert(data.message, 'success');
+                const modal = bootstrap.Modal.getInstance(document.getElementById('deleteUserModal'));
+                modal.hide();
+                setTimeout(() => window.location.reload(), 1000);
+            } else {
+                showAlert(data.message, 'danger');
+            }
+        });
+    });
+
+    // ============================================
+    // TOGGLE STATUS
+    // ============================================
+
+    document.querySelectorAll('.toggle-status-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const userId = this.getAttribute('data-id');
+            const currentStatus = this.getAttribute('data-status');
+            const token = document.querySelector('input[name="csrf_token"]').value;
+            const row = this.closest('tr');
+
+            const formData = new FormData();
+            formData.append('ajax_action', 'toggle_status');
+            formData.append('user_id', userId);
+            formData.append('current_status', currentStatus);
+            formData.append('csrf_token', token);
+
+            ajaxRequest(formData, function(data) {
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    const statusCell = row.querySelector('.status-cell');
+                    if (data.new_status == 1) {
+                        statusCell.innerHTML = '<span class="status-badge active"><i class="fas fa-check-circle"></i>Active</span>';
+                    } else {
+                        statusCell.innerHTML = '<span class="status-badge inactive"><i class="fas fa-minus-circle"></i>Inactive</span>';
+                    }
+                    setTimeout(() => window.location.reload(), 1000);
+                } else {
+                    showAlert(data.message, 'danger');
+                }
+            });
+        });
+    });
+
+    // ============================================
+    // KEYBOARD SHORTCUTS
+    // ============================================
+
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+            e.preventDefault();
+            document.querySelector('input[name="search"]')?.focus();
+        }
+
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+            e.preventDefault();
+            const modal = new bootstrap.Modal(document.getElementById('addUserModal'));
+            modal.show();
+        }
+    });
+
+    // ============================================
+    // AUTO-GENERATE USERNAME FROM FULL NAME (Add Modal)
+    // ============================================
+
+    document.querySelector('#addUserModal input[name="full_name"]')?.addEventListener('blur', function() {
+        const usernameField = document.querySelector('#addUserModal input[name="username"]');
+        if (!usernameField.value.trim() && this.value.trim()) {
+            const nameParts = this.value.trim().toLowerCase().split(' ');
+            let suggestion = nameParts[0];
+            if (nameParts.length > 1) {
+                suggestion += nameParts[nameParts.length - 1].charAt(0);
+            }
+            suggestion = suggestion.replace(/[^a-z0-9]/g, '');
+            usernameField.value = suggestion;
+        }
+    });
+
+    // ============================================
+    // AUTO-DISMISS ALERTS
+    // ============================================
+
+    setTimeout(() => {
+        document.querySelectorAll('.alert').forEach(alert => {
+            alert.style.transition = 'opacity 0.5s';
+            alert.style.opacity = '0';
+            setTimeout(() => alert.remove(), 500);
+        });
+    }, 5000);
+
+    // ============================================
+    // RESET MODAL ON HIDE
+    // ============================================
+
+    document.getElementById('addUserModal')?.addEventListener('hidden.bs.modal', function() {
+        this.querySelector('form').reset();
+        document.getElementById('addAvatarPreview').src = '../../images/avatars/default.png';
+        this.querySelectorAll('.is-invalid').forEach(el => el.classList.remove('is-invalid'));
+    });
+
+})();
+</script>
 </body>
 </html>

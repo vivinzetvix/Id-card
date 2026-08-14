@@ -380,6 +380,42 @@ function getMemberTypeLabel($type) {
             .action-buttons .btn { width: 100%; justify-content: center; }
         }
 
+        /* Print options */
+        .print-options {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: var(--neutral-50);
+            border: 1px solid var(--neutral-200);
+            border-radius: var(--radius-lg);
+        }
+        .print-options-title {
+            font-size: .78rem;
+            font-weight: 700;
+            color: var(--neutral-700);
+            margin-bottom: .65rem;
+            display: flex;
+            align-items: center;
+            gap: .45rem;
+        }
+        .print-options-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: .5rem;
+        }
+        .print-options-grid .btn {
+            justify-content: center;
+            min-height: 42px;
+        }
+        .print-note {
+            margin-top: .6rem;
+            font-size: .72rem;
+            line-height: 1.45;
+            color: var(--neutral-500);
+        }
+        @media (max-width: 576px) {
+            .print-options-grid { grid-template-columns: 1fr; }
+        }
+
         /* Print styles */
         @media print {
             .sidebar, .top-header, .breadcrumb, .card-header-custom, .no-print {
@@ -447,14 +483,16 @@ function getMemberTypeLabel($type) {
                                 </span>
                             </div>
                         </div>
-<!-- In the action buttons section -->
 <div class="action-buttons no-print">
-    <a href="print_id_card.php?id=<?= $card['member_id'] ?>" target="_blank" class="btn btn-warning">
+    <button type="button" class="btn btn-warning" onclick="openPrintPage('normal')">
         <i class="fas fa-print"></i> Print Card
-    </a>
-    <a href="print_id_card.php?id=<?= $card['member_id'] ?>&mirror=1" target="_blank" class="btn btn-primary">
+    </button>
+    <button type="button" class="btn btn-primary" onclick="openPrintPage('mirror')">
         <i class="fas fa-undo"></i> Mirror Print
-    </a>
+    </button>
+    <button type="button" class="btn btn-dark" onclick="openPrintPage('rotate')">
+        <i class="fas fa-rotate-right"></i> Rotate 90°
+    </button>
     <a href="download_card.php?id=<?= $cardId ?>" class="btn btn-success">
         <i class="fas fa-download"></i> Download
     </a>
@@ -568,21 +606,28 @@ function getMemberTypeLabel($type) {
                                     </div>
                                 </div>
 
-                                <div class="mt-3 no-print">
-                                    <div class="d-grid gap-2">
-                                        <button class="btn btn-success" onclick="printCard()">
-                                            <i class="fas fa-print"></i> Print This Card
-                                        </button>
-                                        <div class="d-flex gap-2">
-                                            <a href="print_id_card.php?id=<?= $card['member_id'] ?>" target="_blank" class="btn btn-warning flex-fill">
-                                                <i class="fas fa-print"></i> Full Page
-                                            </a>
-                                            <a href="download_card.php?id=<?= $cardId ?>" class="btn btn-primary flex-fill">
-                                                <i class="fas fa-download"></i> Download
-                                            </a>
-                                        </div>
-                                    </div>
-                                </div>
+                                <div class="print-options no-print">
+    <div class="print-options-title">
+        <i class="fas fa-print text-primary"></i> Print Options
+    </div>
+    <div class="print-options-grid">
+        <button type="button" class="btn btn-warning" onclick="openPrintPage('normal')">
+            <i class="fas fa-print"></i> Normal Print
+        </button>
+        <button type="button" class="btn btn-primary" onclick="openPrintPage('mirror')">
+            <i class="fas fa-undo"></i> Mirror Print
+        </button>
+        <button type="button" class="btn btn-dark" onclick="openPrintPage('rotate')">
+            <i class="fas fa-rotate-right"></i> Rotate 90°
+        </button>
+        <button type="button" class="btn btn-success" onclick="openPrintPage('rotate-mirror')">
+            <i class="fas fa-arrows-rotate"></i> Rotate + Mirror
+        </button>
+    </div>
+    <div class="print-note">
+        Print uses the same saved template layout shown here. Landscape cards can be rotated 90° without changing the design. Mirror applies to both front and back.
+    </div>
+</div>
                             </div>
                         </div>
                     </div>
@@ -596,29 +641,55 @@ function getMemberTypeLabel($type) {
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
     <script>
-        // Print function
-        function printCard() {
-            window.print();
+        // Open the dedicated print page so the dashboard UI itself is never printed.
+        function openPrintPage(mode) {
+            const memberId = <?= (int)($card['member_id'] ?? 0) ?>;
+            if (!memberId) return;
+
+            const params = new URLSearchParams();
+            params.set('id', memberId);
+
+            switch (mode) {
+                case 'mirror':
+                    params.set('mirror', '1');
+                    params.set('rotate', '0');
+                    break;
+                case 'rotate':
+                    params.set('mirror', '0');
+                    params.set('rotate', '1');
+                    break;
+                case 'rotate-mirror':
+                    params.set('mirror', '1');
+                    params.set('rotate', '1');
+                    break;
+                default:
+                    params.set('mirror', '0');
+                    params.set('rotate', '0');
+            }
+
+            window.open('print_id_card.php?' + params.toString(), '_blank', 'noopener');
         }
 
-        // Keyboard shortcuts
+        function printCard() {
+            openPrintPage('normal');
+        }
+
         document.addEventListener('keydown', function(e) {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
                 e.preventDefault();
                 printCard();
             }
-            
+
             if (e.key === 'Escape') {
                 window.location.href = 'allid.php';
             }
         });
 
-        // Auto print if print parameter is set
         <?php if ($printMode): ?>
         document.addEventListener('DOMContentLoaded', function() {
             setTimeout(function() {
-                window.print();
-            }, 500);
+                openPrintPage('normal');
+            }, 250);
         });
         <?php endif; ?>
     </script>

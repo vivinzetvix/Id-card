@@ -6,9 +6,164 @@ require_once __DIR__ . '/functions.php';
 $page_title = 'Organizations';
 require_admin_access($pdo);
 
+// Handle AJAX requests for organization operations
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_action'])) {
+    header('Content-Type: application/json');
+    
+    if (!validate_csrf_token($_POST['csrf_token'] ?? '')) {
+        echo json_encode(['success' => false, 'message' => 'Invalid security token.']);
+        exit();
+    }
+    
+    $action = $_POST['ajax_action'];
+    $response = ['success' => false, 'message' => 'Invalid action'];
+    
+    if ($action === 'add' || $action === 'edit') {
+        $name = trim($_POST['organization_name'] ?? '');
+        $code = trim($_POST['organization_code'] ?? '');
+        $address = trim($_POST['address'] ?? '');
+        $phone = trim($_POST['phone'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $website = trim($_POST['website'] ?? '');
+        $projectType = strtolower(trim($_POST['project_type'] ?? 'corporate'));
+        $status = isset($_POST['status']) ? 1 : 0;
+        
+        if ($name === '' || $code === '' || $email === '') {
+            echo json_encode(['success' => false, 'message' => 'Organization name, code, and email are required.']);
+            exit();
+        }
+        
+        if (!organization_project_type_is_valid($projectType)) {
+            echo json_encode(['success' => false, 'message' => 'Please select either Residence or Corporate as the organization category.']);
+            exit();
+        }
+        
+        try {
+            if ($action === 'add') {
+                $stmt = $pdo->prepare('SELECT id FROM organizations WHERE organization_code = ? OR email = ? LIMIT 1');
+                $stmt->execute([$code, $email]);
+                if ($stmt->fetch(PDO::FETCH_ASSOC)) {
+                    echo json_encode(['success' => false, 'message' => 'An organization with the same code or email already exists.']);
+                    exit();
+                }
+                
+                $logoName = null;
+                if (!empty($_FILES['logo']['name'])) {
+                    $upload = upload_organization_logo($_FILES['logo'], __DIR__ . '/assets/uploads/logo');
+                    if (!$upload['success']) {
+                        echo json_encode(['success' => false, 'message' => $upload['message']]);
+                        exit();
+                    }
+                    $logoName = $upload['file'];
+                }
+                
+                $stmt = $pdo->prepare("INSERT INTO organizations (organization_name, organization_code, logo, address, phone, email, website, project_type, status, created_by, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $stmt->execute([$name, $code, $logoName, $address, $phone, $email, $website, $projectType, $status, get_current_user_id($pdo), get_current_user_id($pdo)]);
+                
+                log_organization_activity($pdo, 'Created organization', 'organization', 'Created organization ' . $name, $pdo->lastInsertId());
+                $response = ['success' => true, 'message' => 'Organization added successfully.', 'action' => 'add'];
+            } else {
+                // Edit
+                $id = (int)($_POST['id'] ?? 0);
+                if (!$id) {
+                    echo json_encode(['success' => false, 'message' => 'Invalid organization ID.']);
+                    exit();
+                }
+                
+                $stmt = $pdo->prepare('SELECT id FROM organizations WHERE (organization_code = ? OR email = ?) AND id != ? LIMIT 1');
+                $stmt->execute([$code, $email, $id]);
+                if ($stmt->fetch(PDO::FETCH_ASSOC)) {
+                    echo json_encode(['success' => false, 'message' => 'Another organization with the same code or email already exists.']);
+                    exit();
+                }
+                
+                $logoName = null;
+                if (!empty($_FILES['logo']['name'])) {
+                    $upload = upload_organization_logo($_FILES['logo'], __DIR__ . '/assets/uploads/logo');
+                    if (!$upload['success']) {
+                        echo json_encode(['success' => false, 'message' => $upload['message']]);
+                        exit();
+                    }
+                    $logoName = $upload['file'];
+                }
+                
+                if ($logoName !== null) {
+                    $stmt = $pdo->prepare("UPDATE organizations SET organization_name = ?, organization_code = ?, logo = ?, address = ?, phone = ?, email = ?, website = ?, project_type = ?, status = ?, updated_by = ? WHERE id = ?");
+                    $stmt->execute([$name, $code, $logoName, $address, $phone, $email, $website, $projectType, $status, get_current_user_id($pdo), $id]);
+                } else {
+                    $stmt = $pdo->prepare("UPDATE organizations SET organization_name = ?, organization_code = ?, address = ?, phone = ?, email = ?, website = ?, project_type = ?, status = ?, updated_by = ? WHERE id = ?");
+                    $stmt->execute([$name, $code, $address, $phone, $email, $website, $projectType, $status, get_current_user_id($pdo), $id]);
+                }
+                
+                log_organization_activity($pdo, 'Updated organization', 'organization', 'Updated organization ' . $name, $id);
+                $response = ['success' => true, 'message' => 'Organization updated successfully.', 'action' => 'edit'];
+            }
+        } catch (PDOException $e) {
+            $response = ['success' => false, 'message' => 'Database error: ' . $e->getMessage()];
+        }
+    } elseif ($action === 'delete') {
+        $id = (int)($_POST['id'] ?? 0);
+        if (!$id) {
+            echo json_encode(['success' => false, 'message' => 'Invalid organization ID.']);
+            exit();
+        }
+        
+        try {
+            $stmt = $pdo->prepare('UPDATE organizations SET deleted_at = NOW() WHERE id = ?');
+            $stmt->execute([$id]);
+            log_organization_activity($pdo, 'Deleted organization', 'organization', 'Deleted organization ID: ' . $id, $id);
+            $response = ['success' => true, 'message' => 'Organization deleted successfully.'];
+        } catch (PDOException $e) {
+            $response = ['success' => false, 'message' => 'Database error: ' . $e->getMessage()];
+        }
+    } elseif ($action === 'toggle_status') {
+        $id = (int)($_POST['id'] ?? 0);
+        if (!$id) {
+            echo json_encode(['success' => false, 'message' => 'Invalid organization ID.']);
+            exit();
+        }
+        
+        try {
+            $stmt = $pdo->prepare('SELECT status FROM organizations WHERE id = ?');
+            $stmt->execute([$id]);
+            $current = $stmt->fetch(PDO::FETCH_ASSOC);
+            $newStatus = $current['status'] == 1 ? 0 : 1;
+            
+            $stmt = $pdo->prepare('UPDATE organizations SET status = ?, updated_by = ? WHERE id = ?');
+            $stmt->execute([$newStatus, get_current_user_id($pdo), $id]);
+            log_organization_activity($pdo, 'Toggled status', 'organization', 'Toggled status for organization ID: ' . $id, $id);
+            $response = ['success' => true, 'message' => 'Status updated successfully.', 'new_status' => $newStatus];
+        } catch (PDOException $e) {
+            $response = ['success' => false, 'message' => 'Database error: ' . $e->getMessage()];
+        }
+    } elseif ($action === 'get_organization') {
+        $id = (int)($_POST['id'] ?? 0);
+        if (!$id) {
+            echo json_encode(['success' => false, 'message' => 'Invalid organization ID.']);
+            exit();
+        }
+        
+        try {
+            $stmt = $pdo->prepare('SELECT * FROM organizations WHERE id = ? AND deleted_at IS NULL');
+            $stmt->execute([$id]);
+            $org = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($org) {
+                $response = ['success' => true, 'data' => $org];
+            } else {
+                $response = ['success' => false, 'message' => 'Organization not found.'];
+            }
+        } catch (PDOException $e) {
+            $response = ['success' => false, 'message' => 'Database error: ' . $e->getMessage()];
+        }
+    }
+    
+    echo json_encode($response);
+    exit();
+}
+
+// Get filters and pagination
 $search = trim($_GET['search'] ?? '');
 $projectType = trim($_GET['project_type'] ?? '');
-$organizationType = trim($_GET['organization_type'] ?? '');
 $statusFilter = trim($_GET['status'] ?? '');
 $page = max(1, (int)($_GET['page'] ?? 1));
 $perPage = 15;
@@ -25,11 +180,6 @@ if ($search !== '') {
 if ($projectType !== '') {
     $where[] = 'project_type = ?';
     $params[] = $projectType;
-}
-
-if ($organizationType !== '') {
-    $where[] = 'organization_type = ?';
-    $params[] = $organizationType;
 }
 
 if ($statusFilter !== '') {
@@ -50,12 +200,31 @@ $totalPages = max(1, (int)ceil($totalItems / $perPage));
 $counts = get_organization_counts($pdo);
 $recent = $pdo->query("SELECT * FROM organizations WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 5")->fetchAll(PDO::FETCH_ASSOC);
 
+function h($value): string
+{
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
+}
+
 function get_organization_status_badge($status) {
     if ($status == 1) {
-        return '<span class="status-badge active"><i class="fas fa-check-circle"></i>Active</span>';
+        return '<span class="status-badge active"><i class="fas fa-check-circle"></i> Active</span>';
     }
-    return '<span class="status-badge inactive"><i class="fas fa-minus-circle"></i>Inactive</span>';
+    return '<span class="status-badge inactive"><i class="fas fa-minus-circle"></i> Inactive</span>';
 }
+
+function organizations_page_url(array $filters, int $pageNum = 1): string
+{
+    $params = $filters;
+    $params['page'] = $pageNum > 1 ? $pageNum : null;
+    $params = array_filter($params, static fn($v) => $v !== null && $v !== '');
+    return '?' . http_build_query($params);
+}
+
+$filterState = [
+    'search'       => $search,
+    'project_type' => $projectType,
+    'status'       => $statusFilter,
+];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -64,1389 +233,1109 @@ function get_organization_status_badge($status) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
     <title>Organizations · ID Card Generator</title>
 
-    <!-- Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&family=Poppins:wght@500;600;700&family=Roboto:wght@400;500;700&family=Lato:wght@400;700&family=Montserrat:wght@500;600;700&family=Playfair+Display:wght@600;700&family=Libre+Barcode+128&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --primary:#0a1a2f;
+            --primary-light:#1e3a5f;
+            --success:#0e9f6e;
+            --warning:#d97706;
+            --danger:#dc2626;
+            --info:#2563eb;
+            --neutral-50:#f8fafc;
+            --neutral-100:#f1f5f9;
+            --neutral-200:#e2e8f0;
+            --neutral-300:#cbd5e1;
+            --neutral-500:#64748b;
+            --neutral-700:#334155;
+            --neutral-800:#1e293b;
+            --shadow-sm:0 1px 3px rgba(0,0,0,.05);
+            --shadow-md:0 4px 10px rgba(15,23,42,.07);
+            --shadow-lg:0 12px 30px rgba(15,23,42,.10);
+            --radius:12px;
         }
 
-        :root {
-            --primary: #0a1a2f;
-            --primary-light: #1e3a5f;
-            --primary-soft: #e8f0fe;
-            --accent: #e53e3e;
-            --accent-soft: #fee2e2;
-            --success: #0e9f6e;
-            --success-soft: #e3f9ee;
-            --warning: #f4b740;
-            --warning-soft: #fef5e0;
-            --danger: #dc2626;
-            --danger-soft: #fee2e2;
-            --info: #3b82f6;
-            --info-soft: #dbeafe;
-            --neutral-50: #f9fafb;
-            --neutral-100: #f3f4f6;
-            --neutral-200: #e5e7eb;
-            --neutral-300: #d1d5db;
-            --neutral-400: #9ca3af;
-            --neutral-500: #6b7280;
-            --neutral-600: #4b5563;
-            --neutral-700: #374151;
-            --neutral-800: #1f2937;
-            --neutral-900: #111827;
-            
-            --shadow-sm: 0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.1);
-            --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
-            --shadow-lg: 0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05);
-            --shadow-xl: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
-            --shadow-2xl: 0 25px 50px -12px rgba(0,0,0,0.25);
-            
-            --radius-sm: 0.375rem;
-            --radius-md: 0.5rem;
-            --radius-lg: 0.75rem;
-            --radius-xl: 1rem;
-            --radius-2xl: 1.5rem;
-            --radius-3xl: 2rem;
-        }
+        * { box-sizing:border-box; }
 
         body {
-            font-family: 'Inter', sans-serif;
-            background: var(--neutral-50);
-            color: var(--neutral-800);
-            line-height: 1.5;
+            margin:0;
+            background:var(--neutral-50);
+            color:var(--neutral-800);
+            font-family:'Inter',sans-serif;
         }
 
-        /* ===== LAYOUT ===== */
-        .dashboard-wrapper {
-            display: flex;
-            min-height: 100vh;
-        }
+        .dashboard-wrapper { display:flex; min-height:100vh; }
+        .main-content { flex:1; margin-left:280px; min-height:100vh; }
+        .dashboard-content { max-width:1800px; margin:0 auto; padding:28px; }
 
-        /* ----- Main Content ----- */
-        .main-content {
-            flex: 1;
-            margin-left: 280px;
-            min-height: 100vh;
-            background: var(--neutral-50);
-        }
+        .breadcrumb-container { margin-bottom:20px; }
+        .breadcrumb { margin:0; font-size:.86rem; }
+        .breadcrumb a { text-decoration:none; color:var(--info); }
 
-        /* ----- Top Header ----- */
-        .top-header {
-            background: white;
-            padding: 1rem 2rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            border-bottom: 1px solid var(--neutral-200);
-            position: sticky;
-            top: 0;
-            z-index: 40;
-            box-shadow: var(--shadow-sm);
-        }
-
-        .menu-toggle {
-            display: none;
-            font-size: 1.5rem;
-            color: var(--neutral-600);
-            cursor: pointer;
-            background: none;
-            border: none;
-            padding: 0.5rem;
-            border-radius: var(--radius-md);
-            transition: background 0.2s;
-        }
-
-        .menu-toggle:hover {
-            background: var(--neutral-100);
-        }
-
-        .page-title {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-
-        .page-title h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: var(--neutral-800);
-        }
-
-        .header-actions {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-
-        .notification-btn {
-            position: relative;
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: var(--neutral-100);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--neutral-600);
-            text-decoration: none;
-            transition: all 0.2s;
-        }
-
-        .notification-btn:hover {
-            background: var(--neutral-200);
-            color: var(--neutral-800);
-        }
-
-        .notification-badge {
-            position: absolute;
-            top: -2px;
-            right: -2px;
-            background: var(--accent);
-            color: white;
-            font-size: 0.75rem;
-            width: 18px;
-            height: 18px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .user-menu {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            padding: 0.5rem 0.75rem;
-            background: var(--neutral-100);
-            border-radius: var(--radius-lg);
-            cursor: pointer;
-            transition: all 0.2s;
-            position: relative;
-        }
-
-        .user-menu:hover {
-            background: var(--neutral-200);
-        }
-
-        .user-avatar {
-            width: 36px;
-            height: 36px;
-            background: var(--primary);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: 600;
-        }
-
-        .user-info {
-            line-height: 1.4;
-        }
-
-        .user-name {
-            font-weight: 600;
-            font-size: 0.875rem;
-        }
-
-        .user-role {
-            font-size: 0.75rem;
-            color: var(--neutral-500);
-        }
-
-        /* ----- Content Area ----- */
-        .content-area {
-            padding: 2rem;
-            max-width: 1600px;
-            margin: 0 auto;
-        }
-
-        /* Breadcrumb */
-        .breadcrumb-container {
-            background: transparent;
-            padding: 0 0 1.5rem 0;
-        }
-
-        .breadcrumb {
-            background: transparent;
-            padding: 0;
-            margin: 0;
-            font-size: 0.875rem;
-        }
-
-        .breadcrumb-item a {
-            color: var(--primary);
-            text-decoration: none;
-            transition: color 0.2s;
-        }
-
-        .breadcrumb-item a:hover {
-            color: var(--accent);
-        }
-
-        .breadcrumb-item.active {
-            color: var(--neutral-600);
-        }
-
-        .breadcrumb-item + .breadcrumb-item::before {
-            content: "›";
-            color: var(--neutral-400);
-        }
-
-        /* Alert Messages */
         .alert {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            padding: 1rem 1.5rem;
-            border-radius: var(--radius-lg);
-            margin-bottom: 1.5rem;
-            animation: slideIn 0.3s ease;
-            border: none;
+            display:flex;
+            align-items:center;
+            gap:10px;
+            padding:12px 16px;
+            border-radius:10px;
+            margin-bottom:16px;
         }
 
-        .alert-success {
-            background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
-            color: white;
-        }
-
-        .alert-danger {
-            background: linear-gradient(135deg, var(--danger) 0%, #b91c1c 100%);
-            color: white;
-        }
-
-        .alert i {
-            font-size: 1.25rem;
-        }
-
-        .alert-content {
-            flex: 1;
-        }
-
-        .alert .btn-close {
-            filter: brightness(0) invert(1);
-            background: none;
-            border: none;
-            font-size: 1.25rem;
-            cursor: pointer;
-            opacity: 0.7;
-            transition: opacity 0.2s;
-            padding: 0.25rem;
-        }
-
-        .alert .btn-close:hover {
-            opacity: 1;
-        }
-
-        /* Stats Cards */
         .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 2rem;
+            display:grid;
+            grid-template-columns:repeat(4,minmax(150px,1fr));
+            gap:14px;
+            margin-bottom:18px;
         }
 
         .stat-card {
-            background: white;
-            border-radius: var(--radius-xl);
-            padding: 1.25rem 1.5rem;
-            box-shadow: var(--shadow-md);
-            border: 1px solid var(--neutral-200);
-            transition: all 0.2s;
+            background:#fff;
+            border:1px solid var(--neutral-200);
+            border-radius:18px;
+            padding:18px;
+            box-shadow:var(--shadow-sm);
+            transition:.2s ease;
         }
 
-        .stat-card:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-lg);
+        .stat-card.clickable { cursor:pointer; }
+        .stat-card:hover { transform:translateY(-2px); box-shadow:var(--shadow-md); }
+        .stat-label { font-size:.7rem; color:var(--neutral-500); text-transform:uppercase; letter-spacing:.05em; }
+        .stat-number { font-size:1.7rem; font-weight:700; }
+
+        .layout-grid {
+            display:grid;
+            grid-template-columns:2.2fr 1fr;
+            gap:18px;
+            align-items:start;
         }
 
-        .stat-card .stat-label {
-            font-size: 0.813rem;
-            color: var(--neutral-500);
-            margin-bottom: 0.25rem;
+        .main-card {
+            background:#fff;
+            border:1px solid var(--neutral-200);
+            border-radius:18px;
+            overflow:hidden;
+            box-shadow:var(--shadow-md);
         }
 
-        .stat-card .stat-number {
-            font-size: 1.75rem;
-            font-weight: 700;
-            color: var(--neutral-800);
+        .card-header-custom {
+            padding:20px;
+            background:#fff;
+            border-bottom:1px solid var(--neutral-200);
         }
 
-        .stat-card .stat-number.text-primary {
-            color: var(--primary);
+        .card-body-custom { padding:20px; }
+        .card-footer-custom {
+            padding:16px 20px;
+            background:var(--neutral-50);
+            border-top:1px solid var(--neutral-200);
         }
 
-        .stat-card .stat-number.text-success {
-            color: var(--success);
+        .quick-actions { gap:8px; flex-wrap:wrap; }
+
+        .advanced-box {
+            margin-top:18px;
+            padding:18px;
+            border:1px solid var(--neutral-200);
+            border-radius:14px;
+            background:var(--neutral-50);
         }
 
-        .stat-card .stat-number.text-secondary {
-            color: var(--neutral-600);
+        .filter-grid {
+            display:grid;
+            grid-template-columns:repeat(4,minmax(150px,1fr));
+            gap:12px;
         }
 
-        /* Buttons */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.625rem 1.25rem;
-            border-radius: var(--radius-lg);
-            font-weight: 500;
-            font-size: 0.9375rem;
-            text-decoration: none;
-            transition: all 0.2s;
-            border: none;
-            cursor: pointer;
-            white-space: nowrap;
+        .filter-item label {
+            display:block;
+            margin-bottom:5px;
+            font-size:.72rem;
+            font-weight:700;
+            color:var(--neutral-500);
+            text-transform:uppercase;
         }
 
-        .btn-primary {
-            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
-            color: white;
-            box-shadow: var(--shadow-md);
+        .filter-item .form-control,
+        .filter-item .form-select {
+            min-height:42px;
+            border-radius:9px;
+            font-size:.82rem;
         }
 
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: var(--shadow-lg);
-            color: white;
+        .filter-actions {
+            display:flex;
+            justify-content:flex-end;
+            gap:8px;
+            margin-top:14px;
         }
 
-        .btn-outline-primary {
-            background: transparent;
-            border: 1px solid var(--primary);
-            color: var(--primary);
-        }
-
-        .btn-outline-primary:hover {
-            background: var(--primary);
-            color: white;
-            transform: translateY(-2px);
-        }
-
-        .btn-outline-secondary {
-            background: transparent;
-            border: 1px solid var(--neutral-300);
-            color: var(--neutral-600);
-        }
-
-        .btn-outline-secondary:hover {
-            background: var(--neutral-100);
-            border-color: var(--neutral-400);
-            transform: translateY(-2px);
-            color: var(--neutral-800);
-        }
-
-        .btn-outline-warning {
-            background: transparent;
-            border: 1px solid var(--warning);
-            color: var(--warning);
-        }
-
-        .btn-outline-warning:hover {
-            background: var(--warning);
-            color: var(--neutral-900);
-            transform: translateY(-2px);
-        }
-
-        .btn-outline-danger {
-            background: transparent;
-            border: 1px solid var(--danger);
-            color: var(--danger);
-        }
-
-        .btn-outline-danger:hover {
-            background: var(--danger);
-            color: white;
-            transform: translateY(-2px);
-        }
-
-        .btn-sm {
-            padding: 0.3rem 0.6rem;
-            font-size: 0.813rem;
-        }
-
-        .btn-group-sm .btn {
-            padding: 0.25rem 0.5rem;
-            font-size: 0.75rem;
-        }
-
-        .btn.w-100 {
-            width: 100%;
-            justify-content: center;
-        }
-
-        /* Cards */
-        .card {
-            background: white;
-            border-radius: var(--radius-2xl);
-            box-shadow: var(--shadow-md);
-            border: 1px solid var(--neutral-200);
-            overflow: hidden;
-            transition: all 0.2s;
-        }
-
-        .card:hover {
-            box-shadow: var(--shadow-lg);
-        }
-
-        .card-body {
-            padding: 1.25rem 1.5rem;
-        }
-
-        .card-title {
-            font-size: 1rem;
-            font-weight: 600;
-            color: var(--neutral-800);
-            margin-bottom: 1rem;
-        }
-
-        .border-0 {
-            border: none;
-        }
-
-        /* Table */
-        .table-responsive {
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
+        .table-wrap {
+            width:100%;
+            overflow:auto;
+            border:1px solid var(--neutral-200);
+            border-radius:12px;
         }
 
         .table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 0;
+            margin:0;
+            min-width:600px;
+            font-size:.8rem;
         }
 
         .table thead th {
-            text-align: left;
-            padding: 0.75rem 1rem;
-            font-size: 0.75rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--neutral-500);
-            background: var(--neutral-100);
-            border-bottom: 1px solid var(--neutral-200);
-            white-space: nowrap;
+            background:var(--neutral-50);
+            color:var(--neutral-500);
+            font-size:.68rem;
+            text-transform:uppercase;
+            letter-spacing:.04em;
+            white-space:nowrap;
+            border-bottom:2px solid var(--neutral-200);
+            padding:11px 9px;
+            vertical-align:middle;
         }
 
         .table tbody td {
-            padding: 0.75rem 1rem;
-            border-bottom: 1px solid var(--neutral-200);
-            color: var(--neutral-600);
-            font-size: 0.875rem;
-            vertical-align: middle;
+            padding:10px 9px;
+            border-bottom:1px solid var(--neutral-100);
+            vertical-align:middle;
         }
 
-        .table tbody tr:last-child td {
-            border-bottom: none;
-        }
+        .table tbody tr:hover td { background:#fbfdff; }
 
-        .table tbody tr:hover td {
-            background: var(--neutral-50);
-        }
-
-        .table .text-center {
-            text-align: center;
-        }
-
-        /* Logo Thumb */
         .logo-thumb {
-            width: 40px;
-            height: 40px;
-            border-radius: var(--radius-lg);
-            object-fit: cover;
-            border: 1px solid var(--neutral-200);
-            background: var(--neutral-100);
+            width:42px;
+            height:42px;
+            object-fit:cover;
+            border-radius:10px;
+            border:1px solid var(--neutral-200);
+            background:var(--neutral-100);
         }
 
-        /* Status Badge */
+        .org-name {
+            font-weight:700;
+            color:var(--neutral-800);
+            white-space:nowrap;
+        }
+
+        .muted { color:var(--neutral-500); }
+        .small-text { font-size:.72rem; }
+
         .status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            padding: 0.3rem 0.75rem;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 500;
+            display:inline-flex;
+            align-items:center;
+            gap:4px;
+            padding:4px 8px;
+            border-radius:999px;
+            font-size:.66rem;
+            font-weight:700;
+            white-space:nowrap;
+            background:#eef2f7;
+            color:#64748b;
         }
 
-        .status-badge.active {
-            background: var(--success-soft);
-            color: var(--success);
-        }
+        .status-badge.active { background:#dcfce7; color:#15803d; }
+        .status-badge.inactive { background:#f1f5f9; color:#64748b; }
 
-        .status-badge.inactive {
-            background: var(--neutral-200);
-            color: var(--neutral-600);
-        }
+        .empty-state { padding:60px 20px; text-align:center; }
+        .empty-state i { font-size:3rem; color:#cbd5e1; margin-bottom:12px; }
+        .empty-state p { color:#64748b; }
 
-        .status-badge i {
-            font-size: 0.625rem;
-        }
-
-        /* List Group */
-        .list-group {
-            display: flex;
-            flex-direction: column;
-            padding-left: 0;
-            margin-bottom: 0;
-            border-radius: 0;
-        }
-
-        .list-group-flush .list-group-item {
-            border-left: 0;
-            border-right: 0;
-            border-radius: 0;
-            padding: 0.75rem 0;
-        }
-
-        .list-group-item {
-            position: relative;
-            display: block;
-            padding: 0.75rem 1.25rem;
-            background-color: white;
-            border: 1px solid var(--neutral-200);
-        }
-
-        .list-group-item:first-child {
-            border-top-left-radius: 0;
-            border-top-right-radius: 0;
-        }
-
-        .list-group-item:last-child {
-            border-bottom-right-radius: 0;
-            border-bottom-left-radius: 0;
-        }
-
-        .list-group-item .d-flex {
-            display: flex;
-        }
-
-        .list-group-item .justify-content-between {
-            justify-content: space-between;
-        }
-
-        .list-group-item .align-items-center {
-            align-items: center;
-        }
-
-        .badge.bg-light {
-            background: var(--neutral-100);
-            color: var(--neutral-600);
-        }
-
-        /* Pagination */
         .pagination-custom {
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            flex-wrap: wrap;
-            gap: 0.25rem;
-            padding-top: 1rem;
-            list-style: none;
+            display:flex;
+            align-items:center;
+            justify-content:flex-end;
+            gap:5px;
+            flex-wrap:wrap;
+            list-style:none;
+            padding:0;
+            margin:0;
         }
 
-        .pagination-custom .page-item {
-            display: inline-block;
+        .pagination-custom a {
+            display:block;
+            padding:6px 10px;
+            background:#fff;
+            border:1px solid var(--neutral-200);
+            border-radius:8px;
+            text-decoration:none;
+            color:var(--neutral-700);
+            font-size:.78rem;
         }
 
-        .pagination-custom .page-link {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-width: 36px;
-            height: 36px;
-            padding: 0 0.75rem;
-            border: 1px solid var(--neutral-300);
-            border-radius: var(--radius-md);
-            background: white;
-            color: var(--neutral-600);
-            text-decoration: none;
-            transition: all 0.2s;
-            font-size: 0.875rem;
+        .pagination-custom .active a {
+            background:var(--primary);
+            color:#fff;
+            border-color:var(--primary);
         }
 
-        .pagination-custom .page-link:hover:not(.active) {
-            background: var(--neutral-100);
-            border-color: var(--neutral-400);
-            transform: translateY(-2px);
+        .recent-list {
+            display:flex;
+            flex-direction:column;
+            gap:0;
         }
 
-        .pagination-custom .page-item.active .page-link {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: white;
+        .recent-item {
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap:10px;
+            padding:12px 0;
+            border-bottom:1px solid var(--neutral-100);
         }
 
-        /* Row and Grid */
-        .row {
-            display: flex;
-            flex-wrap: wrap;
-            margin: 0 -0.75rem;
+        .recent-item:last-child { border-bottom:0; }
+
+        .recent-item .name {
+            font-weight:700;
+            font-size:.82rem;
+            color:var(--neutral-800);
         }
 
-        .col-lg-8 {
-            flex: 0 0 66.666%;
-            max-width: 66.666%;
-            padding: 0 0.75rem;
+        .recent-item .code {
+            font-size:.7rem;
+            color:var(--neutral-500);
         }
 
-        .col-lg-4 {
-            flex: 0 0 33.333%;
-            max-width: 33.333%;
-            padding: 0 0.75rem;
+        .recent-item .date-chip {
+            font-size:.68rem;
+            padding:3px 8px;
+            border-radius:999px;
+            background:var(--neutral-100);
+            color:var(--neutral-700);
+            white-space:nowrap;
         }
 
-        .col-md-3 {
-            flex: 0 0 25%;
-            max-width: 25%;
-            padding: 0 0.75rem;
-        }
+        .btn-group-sm .btn { font-size:.75rem; padding:.3rem .5rem; }
 
-        .col-md-2 {
-            flex: 0 0 16.666%;
-            max-width: 16.666%;
-            padding: 0 0.75rem;
+        /* Modal Styles */
+        .modal-content { 
+            border:0; 
+            border-radius:18px; 
+            box-shadow:var(--shadow-lg);
+            max-height: 90vh;
         }
-
-        .col-md-1 {
-            flex: 0 0 8.333%;
-            max-width: 8.333%;
-            padding: 0 0.75rem;
-        }
-
-        .g-2 {
-            margin: -0.5rem;
-        }
-
-        .g-2 > [class*="col-"] {
-            padding: 0.5rem;
-        }
-
-        .g-3 {
-            margin: -0.75rem;
-        }
-
-        .g-3 > [class*="col-"] {
-            padding: 0.75rem;
-        }
-
-        .g-4 {
-            margin: -1rem;
-        }
-
-        .g-4 > [class*="col-"] {
-            padding: 1rem;
-        }
-
-        .mb-0 {
-            margin-bottom: 0;
-        }
-        .mb-1 {
-            margin-bottom: 0.25rem;
-        }
-        .mb-2 {
-            margin-bottom: 0.5rem;
-        }
-        .mb-3 {
-            margin-bottom: 1rem;
-        }
-        .mb-4 {
-            margin-bottom: 1.5rem;
-        }
-        .mt-2 {
-            margin-top: 0.5rem;
-        }
-        .mt-3 {
-            margin-top: 1rem;
-        }
-        .mt-4 {
-            margin-top: 1.5rem;
-        }
-        .me-1 {
-            margin-right: 0.25rem;
-        }
-        .me-2 {
-            margin-right: 0.5rem;
-        }
-
-        .fw-semibold {
-            font-weight: 600;
-        }
-        .fw-bold {
-            font-weight: 700;
-        }
-        .text-muted {
-            color: var(--neutral-500);
-        }
-        .text-primary {
-            color: var(--primary);
-        }
-        .text-success {
-            color: var(--success);
-        }
-        .text-secondary {
-            color: var(--neutral-600);
-        }
-        .text-dark {
-            color: var(--neutral-800);
-        }
-        .small {
-            font-size: 0.813rem;
-        }
-
-        .d-flex {
-            display: flex;
-        }
-        .flex-column {
-            flex-direction: column;
-        }
-        .flex-md-row {
-            flex-direction: row;
-        }
-        .justify-content-between {
-            justify-content: space-between;
-        }
-        .justify-content-end {
-            justify-content: flex-end;
-        }
-        .align-items-center {
-            align-items: center;
-        }
-        .align-items-md-center {
-            align-items: center;
-        }
-
-        /* Form Controls */
-        .form-control,
-        .form-select {
-            border: 1px solid var(--neutral-300);
-            border-radius: var(--radius-lg);
-            padding: 0.5rem 0.75rem;
-            font-size: 0.875rem;
-            font-family: 'Inter', sans-serif;
-            transition: all 0.2s;
-            background: white;
-            color: var(--neutral-800);
-            width: 100%;
-        }
-
-        .form-control:focus,
-        .form-select:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(10, 26, 47, 0.1);
-        }
-
-        .form-select {
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
-            background-position: right 0.75rem center;
-            background-repeat: no-repeat;
-            background-size: 1.25rem;
-            padding-right: 2rem;
-        }
-
-        /* Container */
-        .container-fluid {
-            padding: 0 2rem;
-            width: 100%;
-        }
-
-        .py-4 {
-            padding-top: 1.5rem;
-            padding-bottom: 1.5rem;
-        }
-
-        /* Modal */
-        .modal-content {
-            border-radius: var(--radius-2xl);
-            border: none;
-            box-shadow: var(--shadow-2xl);
-            overflow: hidden;
-        }
-
-        .modal-header {
-            padding: 1.25rem 1.5rem;
-            border-bottom: 1px solid var(--neutral-200);
-        }
-
-        .modal-header .btn-close {
-            filter: none;
-        }
-
+        .modal-header { border-bottom:1px solid var(--neutral-200); }
+        .modal-footer { border-top:1px solid var(--neutral-200); }
+        
         .modal-body {
-            padding: 1.5rem;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        
+        .modal-form-grid {
+            display:grid;
+            grid-template-columns:repeat(2,minmax(220px,1fr));
+            gap:16px;
+        }
+        
+        .modal-form-item.full { grid-column:1 / -1; }
+        
+        .modal-form-item label {
+            display:block;
+            margin-bottom:6px;
+            font-size:.78rem;
+            font-weight:700;
+            color:var(--neutral-700);
+            text-transform:uppercase;
+            letter-spacing:.03em;
+        }
+        
+        .modal-form-item label .req { color:var(--danger); }
+        
+        .modal-form-item .form-control,
+        .modal-form-item .form-select {
+            min-height:42px;
+            border-radius:9px;
+            font-size:.86rem;
+            border:1px solid var(--neutral-300);
+        }
+        
+        .modal-form-item .form-control:focus,
+        .modal-form-item .form-select:focus {
+            outline:none;
+            border-color:var(--primary);
+            box-shadow:0 0 0 3px rgba(10,26,47,.08);
+        }
+        
+        .modal-form-item textarea.form-control {
+            min-height:90px;
+            resize:vertical;
+        }
+        
+        .form-hint {
+            font-size:.72rem;
+            color:var(--neutral-500);
+            margin-top:5px;
+        }
+        
+        .form-check-row {
+            display:flex;
+            align-items:center;
+            gap:8px;
+            min-height:42px;
         }
 
-        .modal-footer {
-            padding: 1rem 1.5rem;
-            border-top: 1px solid var(--neutral-200);
-            display: flex;
-            gap: 0.75rem;
-            justify-content: flex-end;
+        @media(max-width:1200px) {
+            .layout-grid { grid-template-columns:1fr; }
+            .filter-grid { grid-template-columns:repeat(3,minmax(150px,1fr)); }
         }
 
-        .modal-footer .btn {
-            min-width: 80px;
-            justify-content: center;
+        @media(max-width:992px) {
+            .main-content { margin-left:0; }
+            .dashboard-content { padding:16px; }
+            .stats-grid { grid-template-columns:repeat(2,1fr); }
+            .filter-grid { grid-template-columns:repeat(2,minmax(150px,1fr)); }
+            .modal-form-grid { grid-template-columns:1fr; }
         }
 
-        .text-muted.small {
-            color: var(--neutral-500);
-            font-size: 0.813rem;
-        }
-
-        /* Responsive */
-        @media (max-width: 1024px) {
-            .sidebar {
-                transform: translateX(-100%);
-                position: fixed;
-                top: 0;
-                left: 0;
-                bottom: 0;
-                z-index: 1000;
-                width: 280px;
-                background: var(--primary);
-                transition: transform 0.3s ease;
-                overflow-y: auto;
-            }
-
-            .sidebar.active {
-                transform: translateX(0);
-            }
-
-            .main-content {
-                margin-left: 0;
-            }
-
-            .menu-toggle {
-                display: block;
-            }
-
-            .col-lg-8,
-            .col-lg-4 {
-                flex: 0 0 100%;
-                max-width: 100%;
-            }
-        }
-
-        @media (max-width: 768px) {
-            .content-area {
-                padding: 1rem;
-            }
-
-            .container-fluid {
-                padding: 0 1rem;
-            }
-
-            .top-header {
-                padding: 0.75rem 1rem;
-            }
-
-            .user-info {
-                display: none;
-            }
-
-            .stats-grid {
-                grid-template-columns: 1fr 1fr;
-                gap: 0.75rem;
-            }
-
-            .stat-card {
-                padding: 1rem;
-            }
-
-            .stat-card .stat-number {
-                font-size: 1.25rem;
-            }
-
-            .col-md-3 {
-                flex: 0 0 50%;
-                max-width: 50%;
-            }
-
-            .card-body {
-                padding: 1rem;
-            }
-
-            .page-header {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-
-            .page-header form {
-                width: 100%;
-            }
-
-            .page-header form .row {
-                flex-direction: column;
-            }
-
-            .page-header form .col-md-3,
-            .page-header form .col-md-2,
-            .page-header form .col-md-1 {
-                flex: 0 0 100%;
-                max-width: 100%;
-                padding: 0.25rem 0;
-            }
-
-            .table thead th,
-            .table tbody td {
-                padding: 0.5rem 0.5rem;
-                font-size: 0.75rem;
-            }
-
-            .logo-thumb {
-                width: 32px;
-                height: 32px;
-            }
-
-            .pagination-custom {
-                justify-content: center;
-            }
-
-            .modal-footer {
-                flex-direction: column;
-            }
-
-            .modal-footer .btn {
-                width: 100%;
-                justify-content: center;
-            }
-        }
-
-        @media (max-width: 480px) {
-            .content-area {
-                padding: 0.75rem;
-            }
-
-            .container-fluid {
-                padding: 0 0.75rem;
-            }
-
-            .stats-grid {
-                grid-template-columns: 1fr;
-                gap: 0.5rem;
-            }
-
-            .stat-card {
-                padding: 0.75rem 1rem;
-            }
-
-            .stat-card .stat-number {
-                font-size: 1.1rem;
-            }
-
-            .col-md-3 {
-                flex: 0 0 100%;
-                max-width: 100%;
-            }
-
-            .card-body {
-                padding: 0.75rem;
-            }
-
-            .table {
-                font-size: 0.75rem;
-            }
-
-            .table thead th,
-            .table tbody td {
-                padding: 0.4rem 0.4rem;
-                font-size: 0.688rem;
-            }
-
-            .logo-thumb {
-                width: 28px;
-                height: 28px;
-            }
-
-            .btn-group-sm .btn {
-                padding: 0.15rem 0.3rem;
-                font-size: 0.625rem;
-            }
-
-            .status-badge {
-                font-size: 0.625rem;
-                padding: 0.15rem 0.4rem;
-            }
-
-            .btn {
-                padding: 0.5rem 0.75rem;
-                font-size: 0.813rem;
-            }
-
-            .page-head h1 {
-                font-size: 1.25rem;
-            }
-        }
-
-        @keyframes slideIn {
-            from {
-                transform: translateY(-20px);
-                opacity: 0;
-            }
-            to {
-                transform: translateY(0);
-                opacity: 1;
-            }
-        }
-
-        /* Print Styles */
-        @media print {
-            .sidebar,
-            .top-header,
-            .menu-toggle,
-            .header-actions,
-            .btn,
-            .btn-group,
-            .modal,
-            .alert .btn-close {
-                display: none !important;
-            }
-
-            .main-content {
-                margin-left: 0;
-                padding: 0;
-            }
-
-            .content-area {
-                padding: 0.5rem;
-            }
-
-            .card {
-                box-shadow: none;
-                border: 1px solid #ddd;
-                page-break-inside: avoid;
-            }
-
-            .table thead th {
-                background: #f5f5f5 !important;
-            }
-
-            .breadcrumb-container {
-                display: none;
-            }
-
-            .status-badge {
-                border: 1px solid #ddd;
-            }
+        @media(max-width:600px) {
+            .stats-grid { grid-template-columns:1fr; }
+            .filter-grid { grid-template-columns:1fr; }
+            .filter-actions { flex-direction:column; }
+            .filter-actions .btn { width:100%; }
         }
     </style>
 </head>
 <body>
-    <div class="dashboard-wrapper">
-        <!-- Sidebar -->
-        <?php include __DIR__ . '/../includes/sidebar.php'; ?>
+<div class="dashboard-wrapper">
 
-        <!-- Main Content -->
-        <main class="main-content">
-            <!-- Top Header -->
-            <?php include __DIR__ . '/../includes/header.php'; ?>
+    <?php include __DIR__ . '/../includes/sidebar.php'; ?>
 
-            <!-- Content Area -->
-            <div class="content-area">
-                <!-- Breadcrumb -->
-                <div class="breadcrumb-container">
-                    <nav aria-label="breadcrumb">
-                        <ol class="breadcrumb mb-0">
-                            <li class="breadcrumb-item"><a href="../dashboard.php"><i class="fas fa-home me-1"></i>Dashboard</a></li>
-                            <li class="breadcrumb-item active" aria-current="page">Organizations</li>
-                        </ol>
-                    </nav>
+    <main class="main-content">
+        <?php include __DIR__ . '/../includes/header.php'; ?>
+
+        <div class="dashboard-content">
+
+            <div class="breadcrumb-container">
+                <nav aria-label="breadcrumb">
+                    <ol class="breadcrumb">
+                        <li class="breadcrumb-item">
+                            <a href="../dashboard.php"><i class="fas fa-home me-1"></i>Dashboard</a>
+                        </li>
+                        <li class="breadcrumb-item active">Organizations</li>
+                    </ol>
+                </nav>
+            </div>
+
+            <div id="alert-container"></div>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Total Organizations</div>
+                    <div class="stat-number text-primary"><?= (int)$counts['total'] ?></div>
                 </div>
-
-                <!-- Alert Messages -->
-                <?php if (!empty($_SESSION['organization_message'])): ?>
-                    <div class="alert alert-success alert-dismissible fade show" role="alert">
-                        <i class="fas fa-check-circle"></i>
-                        <div class="alert-content"><?= htmlspecialchars($_SESSION['organization_message']) ?></div>
-                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close">&times;</button>
-                    </div>
-                    <?php unset($_SESSION['organization_message']); ?>
-                <?php endif; ?>
-
-                <?php if (!empty($_SESSION['organization_error'])): ?>
-                    <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                        <i class="fas fa-exclamation-circle"></i>
-                        <div class="alert-content"><?= htmlspecialchars($_SESSION['organization_error']) ?></div>
-                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close">&times;</button>
-                    </div>
-                    <?php unset($_SESSION['organization_error']); ?>
-                <?php endif; ?>
-
-                <!-- Stats Cards -->
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-label">Total Organizations</div>
-                        <div class="stat-number text-primary"><?= $counts['total'] ?></div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Active</div>
-                        <div class="stat-number text-success"><?= $counts['active'] ?></div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Inactive</div>
-                        <div class="stat-number text-secondary"><?= $counts['inactive'] ?></div>
-                    </div>
-                    <div class="stat-card" style="cursor: pointer;" onclick="window.location.href='add.php'">
-                        <div class="stat-label">Quick Action</div>
-                        <div class="stat-number" style="font-size: 1rem; color: var(--primary);">Add Organization</div>
-                    </div>
+                <div class="stat-card">
+                    <div class="stat-label">Active</div>
+                    <div class="stat-number text-success"><?= (int)$counts['active'] ?></div>
                 </div>
-
-                <div class="row g-4">
-                    <!-- Main Table -->
-                    <div class="col-lg-8">
-                        <div class="card">
-                            <div class="card-body">
-                                <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center mb-3 gap-3">
-                                    <div>
-                                        <h5 class="card-title mb-0"><i class="fas fa-building text-primary me-2"></i>Organization Directory</h5>
-                                        <p class="text-muted small mb-0">Manage organizations, status, and branding details.</p>
-                                    </div>
-                                    <div>
-                                        <form method="get" class="row g-2 align-items-end">
-                                            <div class="col-md-3">
-                                                <input type="text" name="search" class="form-control" placeholder="Search" value="<?= htmlspecialchars($search) ?>">
-                                            </div>
-                                            <div class="col-md-3">
-                                                <select name="project_type" class="form-select">
-                                                    <option value="">Project Type</option>
-                                                    <option value="residence" <?= $projectType === 'residence' ? 'selected' : '' ?>>Residence</option>
-                                                    <option value="corporate" <?= $projectType === 'corporate' ? 'selected' : '' ?>>Corporate</option>
-                                                </select>
-                                            </div>
-                                            <div class="col-md-3">
-                                                <select name="organization_type" class="form-select">
-                                                    <option value="">Organization Type</option>
-                                                    <option value="company" <?= $organizationType === 'company' ? 'selected' : '' ?>>Company</option>
-                                                    <option value="school" <?= $organizationType === 'school' ? 'selected' : '' ?>>School</option>
-                                                    <option value="college" <?= $organizationType === 'college' ? 'selected' : '' ?>>College</option>
-                                                    <option value="government" <?= $organizationType === 'government' ? 'selected' : '' ?>>Government</option>
-                                                    <option value="hospital" <?= $organizationType === 'hospital' ? 'selected' : '' ?>>Hospital</option>
-                                                    <option value="ngo" <?= $organizationType === 'ngo' ? 'selected' : '' ?>>NGO</option>
-                                                    <option value="other" <?= $organizationType === 'other' ? 'selected' : '' ?>>Other</option>
-                                                </select>
-                                            </div>
-                                            <div class="col-md-2">
-                                                <select name="status" class="form-select">
-                                                    <option value="">Status</option>
-                                                    <option value="active" <?= $statusFilter === 'active' ? 'selected' : '' ?>>Active</option>
-                                                    <option value="inactive" <?= $statusFilter === 'inactive' ? 'selected' : '' ?>>Inactive</option>
-                                                </select>
-                                            </div>
-                                            <div class="col-md-1">
-                                                <button type="submit" class="btn btn-outline-secondary w-100"><i class="fas fa-search"></i></button>
-                                            </div>
-                                        </form>
-                                    </div>
-                                </div>
-
-                                <div class="table-responsive">
-                                    <table class="table">
-                                        <thead>
-                                            <tr>
-                                                <th>Logo</th>
-                                                <th>Name</th>
-                                                <th>Code</th>
-                                                <th>Type</th>
-                                                <th>Status</th>
-                                                <th>Actions</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            <?php if (empty($paginated)): ?>
-                                                <tr>
-                                                    <td colspan="6" class="text-center text-muted py-4">
-                                                        <i class="fas fa-building fa-2x mb-2 d-block text-secondary"></i>
-                                                        No organizations found.
-                                                    </td>
-                                                </tr>
-                                            <?php else: ?>
-                                                <?php foreach ($paginated as $organization): ?>
-                                                    <tr>
-                                                        <td>
-                                                            <img src="<?= htmlspecialchars(get_organization_logo_path($organization['logo'] ?? '')) ?>" class="logo-thumb" alt="Logo">
-                                                        </td>
-                                                        <td>
-                                                            <div class="fw-semibold text-dark"><?= htmlspecialchars($organization['organization_name']) ?></div>
-                                                            <div class="small text-muted"><?= htmlspecialchars($organization['email'] ?? '') ?></div>
-                                                        </td>
-                                                        <td><?= htmlspecialchars($organization['organization_code'] ?? '') ?></td>
-                                                        <td><?= htmlspecialchars(ucfirst((string)($organization['organization_type'] ?? ''))) ?></td>
-                                                        <td><?= get_organization_status_badge((int)($organization['status'] ?? 0)) ?></td>
-                                                        <td>
-                                                            <div class="btn-group btn-group-sm" role="group">
-                                                                <a href="view.php?id=<?= (int)$organization['id'] ?>" class="btn btn-outline-primary" title="View"><i class="fas fa-eye"></i></a>
-                                                                <a href="edit.php?id=<?= (int)$organization['id'] ?>" class="btn btn-outline-secondary" title="Edit"><i class="fas fa-edit"></i></a>
-                                                                <a href="status.php?id=<?= (int)$organization['id'] ?>&status=<?= (int)$organization['status'] === 1 ? 0 : 1 ?>" class="btn btn-outline-warning" title="Toggle Status"><i class="fas fa-toggle-on"></i></a>
-                                                                <button type="button" class="btn btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteOrganizationModal" data-id="<?= (int)$organization['id'] ?>" data-name="<?= htmlspecialchars($organization['organization_name'], ENT_QUOTES) ?>" title="Delete"><i class="fas fa-trash"></i></button>
-                                                            </div>
-                                                        </td>
-                                                    </tr>
-                                                <?php endforeach; ?>
-                                            <?php endif; ?>
-                                        </tbody>
-                                    </table>
-                                </div>
-
-                                <?php if ($totalPages > 1): ?>
-                                    <nav>
-                                        <ul class="pagination-custom">
-                                            <?php for ($i = 1; $i <= $totalPages; $i++): ?>
-                                                <li class="page-item <?= $i === $page ? 'active' : '' ?>">
-                                                    <a class="page-link" href="?page=<?= $i ?>&search=<?= urlencode($search) ?>&project_type=<?= urlencode($projectType) ?>&organization_type=<?= urlencode($organizationType) ?>&status=<?= urlencode($statusFilter) ?>"><?= $i ?></a>
-                                                </li>
-                                            <?php endfor; ?>
-                                        </ul>
-                                    </nav>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Recent Activity Sidebar -->
-                    <div class="col-lg-4">
-                        <div class="card">
-                            <div class="card-body">
-                                <h5 class="card-title"><i class="fas fa-clock text-primary me-2"></i>Recently Added</h5>
-                                <div class="list-group list-group-flush">
-                                    <?php foreach ($recent as $item): ?>
-                                        <div class="list-group-item d-flex justify-content-between align-items-center px-0">
-                                            <div>
-                                                <div class="fw-semibold text-dark"><?= htmlspecialchars($item['organization_name']) ?></div>
-                                                <div class="small text-muted"><?= htmlspecialchars($item['organization_code'] ?? '') ?></div>
-                                            </div>
-                                            <span class="badge bg-light text-dark"><?= date('M d', strtotime($item['created_at'])) ?></span>
-                                        </div>
-                                    <?php endforeach; ?>
-                                </div>
-                            </div>
-                        </div>
+                <div class="stat-card">
+                    <div class="stat-label">Inactive</div>
+                    <div class="stat-number" style="color:var(--neutral-500);"><?= (int)$counts['inactive'] ?></div>
+                </div>
+                <div class="stat-card clickable" data-bs-toggle="modal" data-bs-target="#addOrganizationModal">
+                    <div class="stat-label">Quick Action</div>
+                    <div class="stat-number" style="font-size:1rem;color:var(--primary);">
+                        <i class="fas fa-plus-circle me-1"></i>Add Organization
                     </div>
                 </div>
             </div>
 
-            <?php include __DIR__ . '/../includes/footer.php'; ?>
-        </main>
-    </div>
+            <div class="layout-grid">
 
-    <!-- Modal Confirmation for Organization Delete -->
-    <div class="modal fade" id="deleteOrganizationModal" tabindex="-1" aria-labelledby="deleteOrganizationModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="deleteOrganizationModalLabel"><i class="fas fa-trash-alt text-danger me-2"></i>Delete Organization</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                <div class="main-card">
+
+                    <div class="card-header-custom">
+                        <div class="d-flex flex-column flex-xl-row justify-content-between gap-3">
+                            <div>
+                                <h5 class="mb-1 fw-bold">
+                                    <i class="fas fa-building text-primary me-2"></i>Organization Directory
+                                </h5>
+                                <div class="small muted">
+                                    Manage organizations, status, and branding details.
+                                </div>
+                            </div>
+
+                            <div class="quick-actions">
+                                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addOrganizationModal">
+                                    <i class="fas fa-plus me-1"></i>Add Organization
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="advanced-box">
+                            <form method="get" id="filterForm">
+                                <div class="filter-grid">
+                                    <div class="filter-item" style="grid-column:span 2;">
+                                        <label>Search</label>
+                                        <input type="text" name="search" class="form-control"
+                                               value="<?= h($search) ?>"
+                                               placeholder="Name, Code, Phone, Email">
+                                    </div>
+
+                                    <div class="filter-item">
+                                        <label>Project Type</label>
+                                        <select name="project_type" class="form-select">
+                                            <option value="">All Projects</option>
+                                            <option value="residence" <?= $projectType === 'residence' ? 'selected' : '' ?>>Residence</option>
+                                            <option value="corporate" <?= $projectType === 'corporate' ? 'selected' : '' ?>>Corporate</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="filter-item">
+                                        <label>Status</label>
+                                        <select name="status" class="form-select">
+                                            <option value="">All Status</option>
+                                            <option value="active" <?= $statusFilter === 'active' ? 'selected' : '' ?>>Active</option>
+                                            <option value="inactive" <?= $statusFilter === 'inactive' ? 'selected' : '' ?>>Inactive</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div class="filter-actions">
+                                    <a href="index.php" class="btn btn-outline-secondary">
+                                        <i class="fas fa-rotate-left me-1"></i>Reset
+                                    </a>
+                                    <button type="submit" class="btn btn-primary">
+                                        <i class="fas fa-filter me-1"></i>Apply Filters
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="card-body-custom">
+                        <div class="table-wrap">
+                            <table class="table" id="organizationsTable">
+                                <thead>
+                                    <tr>
+                                        <th>Logo</th>
+                                        <th>Name</th>
+                                        <th>Code</th>
+                                        <th>Status</th>
+                                        <th style="text-align:right;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php if (empty($paginated)): ?>
+                                        <tr>
+                                            <td colspan="5">
+                                                <div class="empty-state">
+                                                    <i class="fas fa-building"></i>
+                                                    <p>No organizations found.</p>
+                                                    <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addOrganizationModal">
+                                                        <i class="fas fa-plus me-1"></i>Add Organization
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php else: ?>
+                                        <?php foreach ($paginated as $organization): ?>
+                                            <tr data-id="<?= (int)$organization['id'] ?>">
+                                                <td>
+                                                    <img src="<?= h(get_organization_logo_path($organization['logo'] ?? '')) ?>"
+                                                         class="logo-thumb" alt="Logo">
+                                                </td>
+                                                <td>
+                                                    <div class="org-name"><?= h($organization['organization_name']) ?></div>
+                                                    <div class="small-text muted"><?= h($organization['email'] ?? '') ?></div>
+                                                </td>
+                                                <td><?= h($organization['organization_code'] ?? '') ?></td>
+                                                <td class="status-cell"><?= get_organization_status_badge((int)($organization['status'] ?? 0)) ?></td>
+                                                <td style="text-align:right;">
+                                                    <div class="btn-group btn-group-sm">
+                                                        <a href="view.php?id=<?= (int)$organization['id'] ?>" class="btn btn-outline-primary" title="View">
+                                                            <i class="fas fa-eye"></i>
+                                                        </a>
+                                                        <button class="btn btn-outline-secondary edit-btn" title="Edit" data-id="<?= (int)$organization['id'] ?>">
+                                                            <i class="fas fa-edit"></i>
+                                                        </button>
+                                                        <button class="btn btn-outline-warning toggle-status-btn" title="Toggle Status" data-id="<?= (int)$organization['id'] ?>" data-status="<?= (int)$organization['status'] ?>">
+                                                            <i class="fas fa-toggle-on"></i>
+                                                        </button>
+                                                        <button class="btn btn-outline-danger delete-btn" title="Delete" data-id="<?= (int)$organization['id'] ?>" data-name="<?= h($organization['organization_name']) ?>">
+                                                            <i class="fas fa-trash"></i>
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    <?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <?php if ($totalPages > 1): ?>
+                        <div class="card-footer-custom">
+                            <ul class="pagination-custom">
+                                <?php for ($i = 1; $i <= $totalPages; $i++): ?>
+                                    <li class="<?= $i === $page ? 'active' : '' ?>">
+                                        <a href="<?= h(organizations_page_url($filterState, $i)) ?>"><?= $i ?></a>
+                                    </li>
+                                <?php endfor; ?>
+                            </ul>
+                        </div>
+                    <?php endif; ?>
+
                 </div>
-                <form method="post" action="delete.php" id="deleteOrganizationForm">
-                    <div class="modal-body">
-                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(generate_csrf_token()) ?>">
-                        <input type="hidden" name="id" id="deleteOrganizationId" value="">
-                        <p>Are you sure you want to delete <strong id="deleteOrganizationName" class="text-danger"></strong>?</p>
-                        <p class="text-muted small">This will soft-delete the organization and prevent it from appearing in active listings.</p>
+
+                <div class="main-card">
+                    <div class="card-header-custom">
+                        <h5 class="mb-0 fw-bold">
+                            <i class="fas fa-clock text-primary me-2"></i>Recently Added
+                        </h5>
                     </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-danger"><i class="fas fa-trash-alt me-1"></i>Delete</button>
+                    <div class="card-body-custom">
+                        <?php if (empty($recent)): ?>
+                            <div class="small muted">No organizations added yet.</div>
+                        <?php else: ?>
+                            <div class="recent-list">
+                                <?php foreach ($recent as $item): ?>
+                                    <div class="recent-item">
+                                        <div>
+                                            <div class="name"><?= h($item['organization_name']) ?></div>
+                                            <div class="code"><?= h($item['organization_code'] ?? '') ?></div>
+                                        </div>
+                                        <span class="date-chip"><?= h(date('M d', strtotime($item['created_at']))) ?></span>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endif; ?>
                     </div>
-                </form>
+                </div>
+
+            </div>
+        </div>
+
+        <?php include __DIR__ . '/../includes/footer.php'; ?>
+    </main>
+</div>
+
+<!-- ============================================ -->
+<!-- ADD ORGANIZATION MODAL -->
+<!-- ============================================ -->
+<div class="modal fade" id="addOrganizationModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-building text-primary me-2"></i>Add Organization
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="addOrganizationForm" enctype="multipart/form-data" novalidate>
+                <div class="modal-body">
+                    <input type="hidden" name="csrf_token" value="<?= h(generate_csrf_token()) ?>">
+                    <input type="hidden" name="ajax_action" value="add">
+                    
+                    <div class="modal-form-grid">
+                        <div class="modal-form-item">
+                            <label>Organization Name <span class="req">*</span></label>
+                            <input type="text" class="form-control" name="organization_name" required placeholder="e.g. ABC International School">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Organization Code <span class="req">*</span></label>
+                            <input type="text" class="form-control" name="organization_code" required placeholder="e.g. ABC001">
+                            <div class="form-hint">Unique identifier for the organization.</div>
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Logo</label>
+                            <input type="file" class="form-control" name="logo" accept=".jpg,.jpeg,.png,.webp">
+                            <div class="form-hint">Allowed: JPG, PNG, WEBP (Max 2MB)</div>
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Phone</label>
+                            <input type="text" class="form-control" name="phone" placeholder="e.g. +1234567890">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Email <span class="req">*</span></label>
+                            <input type="email" class="form-control" name="email" required placeholder="e.g. info@organization.com">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Website</label>
+                            <input type="url" class="form-control" name="website" placeholder="e.g. https://www.organization.com">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Project Type</label>
+                            <select class="form-select" name="project_type">
+                                <option value="corporate">Corporate</option>
+                                <option value="residence">Residence</option>
+                            </select>
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Status</label>
+                            <div class="form-check-row">
+                                <input class="form-check-input" type="checkbox" name="status" id="addStatus" checked>
+                                <label class="form-check-label" for="addStatus" style="text-transform:none;font-weight:500;">Active</label>
+                            </div>
+                            <div class="form-hint">Inactive organizations will not be available for selection.</div>
+                        </div>
+
+                        <div class="modal-form-item full">
+                            <label>Address</label>
+                            <textarea class="form-control" name="address" rows="3" placeholder="Enter full address..."></textarea>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save me-1"></i>Save Organization
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================ -->
+<!-- EDIT ORGANIZATION MODAL -->
+<!-- ============================================ -->
+<div class="modal fade" id="editOrganizationModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-edit text-primary me-2"></i>Edit Organization
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="editOrganizationForm" enctype="multipart/form-data" novalidate>
+                <div class="modal-body">
+                    <input type="hidden" name="csrf_token" value="<?= h(generate_csrf_token()) ?>">
+                    <input type="hidden" name="ajax_action" value="edit">
+                    <input type="hidden" name="id" id="editOrganizationId" value="">
+                    
+                    <div class="modal-form-grid">
+                        <div class="modal-form-item">
+                            <label>Organization Name <span class="req">*</span></label>
+                            <input type="text" class="form-control" name="organization_name" id="editOrgName" required placeholder="e.g. ABC International School">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Organization Code <span class="req">*</span></label>
+                            <input type="text" class="form-control" name="organization_code" id="editOrgCode" required placeholder="e.g. ABC001">
+                            <div class="form-hint">Unique identifier for the organization.</div>
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Logo</label>
+                            <input type="file" class="form-control" name="logo" accept=".jpg,.jpeg,.png,.webp">
+                            <div class="form-hint">Leave empty to keep current logo. Allowed: JPG, PNG, WEBP (Max 2MB)</div>
+                            <div id="editCurrentLogo" class="mt-2"></div>
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Phone</label>
+                            <input type="text" class="form-control" name="phone" id="editPhone" placeholder="e.g. +1234567890">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Email <span class="req">*</span></label>
+                            <input type="email" class="form-control" name="email" id="editEmail" required placeholder="e.g. info@organization.com">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Website</label>
+                            <input type="url" class="form-control" name="website" id="editWebsite" placeholder="e.g. https://www.organization.com">
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Project Type</label>
+                            <select class="form-select" name="project_type" id="editProjectType">
+                                <option value="corporate">Corporate</option>
+                                <option value="residence">Residence</option>
+                            </select>
+                        </div>
+
+                        <div class="modal-form-item">
+                            <label>Status</label>
+                            <div class="form-check-row">
+                                <input class="form-check-input" type="checkbox" name="status" id="editStatus">
+                                <label class="form-check-label" for="editStatus" style="text-transform:none;font-weight:500;">Active</label>
+                            </div>
+                            <div class="form-hint">Inactive organizations will not be available for selection.</div>
+                        </div>
+
+                        <div class="modal-form-item full">
+                            <label>Address</label>
+                            <textarea class="form-control" name="address" id="editAddress" rows="3" placeholder="Enter full address..."></textarea>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save me-1"></i>Update Organization
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ============================================ -->
+<!-- DELETE CONFIRMATION MODAL -->
+<!-- ============================================ -->
+<div class="modal fade" id="deleteOrganizationModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title fw-bold">
+                    <i class="fas fa-trash-alt text-danger me-2"></i>Delete Organization
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" name="csrf_token" id="deleteCsrfToken" value="<?= h(generate_csrf_token()) ?>">
+                <input type="hidden" name="id" id="deleteOrganizationId" value="">
+                <p>Are you sure you want to delete <strong id="deleteOrganizationName" class="text-danger"></strong>?</p>
+                <p class="text-muted small mb-0">This will soft-delete the organization and prevent it from appearing in active listings.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmDeleteBtn">
+                    <i class="fas fa-trash-alt me-1"></i>Delete
+                </button>
             </div>
         </div>
     </div>
+</div>
 
-    <!-- Bootstrap JS -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
-    <script>
-        // Mobile menu toggle
-        document.getElementById('menuToggle')?.addEventListener('click', function() {
-            document.querySelector('.sidebar').classList.toggle('active');
-        });
+<script>
+(function() {
+    'use strict';
 
-        // Close sidebar when clicking outside on mobile
-        document.addEventListener('click', function(event) {
-            const sidebar = document.querySelector('.sidebar');
-            const menuToggle = document.getElementById('menuToggle');
-            
-            if (window.innerWidth <= 1024) {
-                if (sidebar && menuToggle && !sidebar.contains(event.target) && !menuToggle.contains(event.target)) {
-                    sidebar.classList.remove('active');
-                }
-            }
-        });
-
-        // Delete Organization Modal
-        document.addEventListener('DOMContentLoaded', function() {
-            const deleteModal = document.getElementById('deleteOrganizationModal');
-            if (deleteModal) {
-                deleteModal.addEventListener('show.bs.modal', function(event) {
-                    const button = event.relatedTarget;
-                    const orgId = button.getAttribute('data-id');
-                    const orgName = button.getAttribute('data-name');
-
-                    document.getElementById('deleteOrganizationId').value = orgId;
-                    document.getElementById('deleteOrganizationName').textContent = orgName;
-                });
-            }
-        });
-
-        // Auto-dismiss alerts after 5 seconds
+    // Helper function to show alerts
+    function showAlert(message, type = 'success') {
+        const container = document.getElementById('alert-container');
+        const alert = document.createElement('div');
+        alert.className = `alert alert-${type} alert-dismissible fade show`;
+        alert.innerHTML = `
+            <i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'} me-2"></i>
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        `;
+        container.appendChild(alert);
+        
+        // Auto dismiss after 5 seconds
         setTimeout(() => {
-            document.querySelectorAll('.alert').forEach(alert => {
-                alert.style.transition = 'opacity 0.5s';
-                alert.style.opacity = '0';
-                setTimeout(() => alert.remove(), 500);
-            });
+            alert.style.transition = 'opacity 0.5s';
+            alert.style.opacity = '0';
+            setTimeout(() => alert.remove(), 500);
         }, 5000);
+    }
 
-        // Keyboard shortcuts
-        document.addEventListener('keydown', function(e) {
-            // Escape to close mobile menu
-            if (e.key === 'Escape' && window.innerWidth <= 1024) {
-                document.querySelector('.sidebar')?.classList.remove('active');
-            }
-
-            // Ctrl/Cmd + F to focus search
-            if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
-                e.preventDefault();
-                document.querySelector('input[name="search"]')?.focus();
-            }
-
-            // Ctrl/Cmd + N to add new organization
-            if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
-                e.preventDefault();
-                window.location.href = 'add.php';
-            }
+    // Helper function to make AJAX requests
+    function ajaxRequest(formData, callback) {
+        fetch('index.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (callback) callback(data);
+        })
+        .catch(error => {
+            showAlert('An error occurred: ' + error.message, 'danger');
         });
+    }
 
-        // Auto-submit on filter change
-        document.querySelectorAll('select[name="project_type"], select[name="organization_type"], select[name="status"]').forEach(select => {
-            select.addEventListener('change', function() {
-                this.closest('form').submit();
+    // ============================================
+    // ADD ORGANIZATION
+    // ============================================
+    const addForm = document.getElementById('addOrganizationForm');
+    if (addForm) {
+        addForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const submitBtn = this.querySelector('button[type="submit"]');
+            const originalText = submitBtn.innerHTML;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Saving...';
+            submitBtn.disabled = true;
+            
+            ajaxRequest(formData, function(data) {
+                submitBtn.innerHTML = originalText;
+                submitBtn.disabled = false;
+                
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('addOrganizationModal'));
+                    modal.hide();
+                    addForm.reset();
+                    // Refresh page to show new data
+                    setTimeout(() => window.location.reload(), 1000);
+                } else {
+                    showAlert(data.message, 'danger');
+                }
             });
         });
+    }
 
-        // Touch-friendly improvements
-        if ('ontouchstart' in window) {
-            document.querySelectorAll('.btn, .page-link, .form-control, .form-select, .list-group-item').forEach(el => {
-                el.addEventListener('touchstart', function() {
-                    this.style.opacity = '0.8';
-                });
-                el.addEventListener('touchend', function() {
-                    this.style.opacity = '1';
-                });
+    // ============================================
+    // EDIT ORGANIZATION
+    // ============================================
+    const editModal = document.getElementById('editOrganizationModal');
+    let editModalInstance = null;
+    
+    // Open edit modal with data
+    document.querySelectorAll('.edit-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const id = this.getAttribute('data-id');
+            
+            if (!editModalInstance) {
+                editModalInstance = new bootstrap.Modal(editModal);
+            }
+            
+            // Show loading state
+            const form = document.getElementById('editOrganizationForm');
+            form.querySelector('button[type="submit"]').innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Loading...';
+            form.querySelector('button[type="submit"]').disabled = true;
+            
+            // Fetch organization data
+            const formData = new FormData();
+            formData.append('ajax_action', 'get_organization');
+            formData.append('id', id);
+            formData.append('csrf_token', document.querySelector('input[name="csrf_token"]').value);
+            
+            ajaxRequest(formData, function(data) {
+                if (data.success) {
+                    const org = data.data;
+                    document.getElementById('editOrganizationId').value = org.id;
+                    document.getElementById('editOrgName').value = org.organization_name;
+                    document.getElementById('editOrgCode').value = org.organization_code;
+                    document.getElementById('editPhone').value = org.phone || '';
+                    document.getElementById('editEmail').value = org.email;
+                    document.getElementById('editWebsite').value = org.website || '';
+                    document.getElementById('editAddress').value = org.address || '';
+                    document.getElementById('editProjectType').value = org.project_type || 'corporate';
+                    document.getElementById('editStatus').checked = org.status == 1;
+                    
+                    // Show current logo
+                    const logoContainer = document.getElementById('editCurrentLogo');
+if (org.logo) {
+    const logoPath = 'assets/uploads/logo/' + encodeURIComponent(org.logo);
+
+    logoContainer.innerHTML = `
+        <div class="d-flex align-items-center gap-2">
+            <img src="${logoPath}?v=${Date.now()}"
+                 class="logo-thumb"
+                 alt="Current Logo"
+                 style="width:60px;height:60px;object-fit:contain;background:#f8fafc;"
+                 onerror="this.style.display='none';">
+            <span class="small muted">Current logo</span>
+        </div>
+    `;
+} else {
+    logoContainer.innerHTML = '';
+}
+                    
+                    form.querySelector('button[type="submit"]').innerHTML = '<i class="fas fa-save me-1"></i>Update Organization';
+                    form.querySelector('button[type="submit"]').disabled = false;
+                    
+                    editModalInstance.show();
+                } else {
+                    showAlert(data.message, 'danger');
+                }
             });
+        });
+    });
+    
+    // Submit edit form
+    const editForm = document.getElementById('editOrganizationForm');
+    if (editForm) {
+        editForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const submitBtn = this.querySelector('button[type="submit"]');
+            const originalText = submitBtn.innerHTML;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Updating...';
+            submitBtn.disabled = true;
+            
+            ajaxRequest(formData, function(data) {
+                submitBtn.innerHTML = originalText;
+                submitBtn.disabled = false;
+                
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('editOrganizationModal'));
+                    modal.hide();
+                    setTimeout(() => window.location.reload(), 1000);
+                } else {
+                    showAlert(data.message, 'danger');
+                }
+            });
+        });
+    }
+
+    // ============================================
+    // DELETE ORGANIZATION
+    // ============================================
+    const deleteModal = document.getElementById('deleteOrganizationModal');
+    let deleteModalInstance = null;
+    let deleteId = null;
+    
+    document.querySelectorAll('.delete-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const id = this.getAttribute('data-id');
+            const name = this.getAttribute('data-name');
+            
+            deleteId = id;
+            document.getElementById('deleteOrganizationId').value = id;
+            document.getElementById('deleteOrganizationName').textContent = name;
+            
+            if (!deleteModalInstance) {
+                deleteModalInstance = new bootstrap.Modal(deleteModal);
+            }
+            deleteModalInstance.show();
+        });
+    });
+    
+    document.getElementById('confirmDeleteBtn').addEventListener('click', function() {
+        const id = document.getElementById('deleteOrganizationId').value;
+        const token = document.getElementById('deleteCsrfToken').value;
+        
+        this.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Deleting...';
+        this.disabled = true;
+        
+        const formData = new FormData();
+        formData.append('ajax_action', 'delete');
+        formData.append('id', id);
+        formData.append('csrf_token', token);
+        
+        ajaxRequest(formData, function(data) {
+            document.getElementById('confirmDeleteBtn').innerHTML = '<i class="fas fa-trash-alt me-1"></i>Delete';
+            document.getElementById('confirmDeleteBtn').disabled = false;
+            
+            if (data.success) {
+                showAlert(data.message, 'success');
+                const modal = bootstrap.Modal.getInstance(document.getElementById('deleteOrganizationModal'));
+                modal.hide();
+                setTimeout(() => window.location.reload(), 1000);
+            } else {
+                showAlert(data.message, 'danger');
+            }
+        });
+    });
+
+    // ============================================
+    // TOGGLE STATUS
+    // ============================================
+    document.querySelectorAll('.toggle-status-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const id = this.getAttribute('data-id');
+            const token = document.querySelector('input[name="csrf_token"]').value;
+            const row = this.closest('tr');
+            
+            const formData = new FormData();
+            formData.append('ajax_action', 'toggle_status');
+            formData.append('id', id);
+            formData.append('csrf_token', token);
+            
+            ajaxRequest(formData, function(data) {
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    // Update status badge in the row
+                    const statusCell = row.querySelector('.status-cell');
+                    if (data.new_status == 1) {
+                        statusCell.innerHTML = '<span class="status-badge active"><i class="fas fa-check-circle"></i> Active</span>';
+                    } else {
+                        statusCell.innerHTML = '<span class="status-badge inactive"><i class="fas fa-minus-circle"></i> Inactive</span>';
+                    }
+                    // Update stats
+                    setTimeout(() => window.location.reload(), 1000);
+                } else {
+                    showAlert(data.message, 'danger');
+                }
+            });
+        });
+    });
+
+    // ============================================
+    // FILTER AUTO-SUBMIT
+    // ============================================
+    document.querySelectorAll('select[name="project_type"], select[name="status"]').forEach(select => {
+        select.addEventListener('change', function() {
+            this.closest('form').submit();
+        });
+    });
+
+    // ============================================
+    // KEYBOARD SHORTCUTS
+    // ============================================
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+            e.preventDefault();
+            document.querySelector('input[name="search"]')?.focus();
         }
-    </script>
+
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
+            e.preventDefault();
+            const modal = new bootstrap.Modal(document.getElementById('addOrganizationModal'));
+            modal.show();
+        }
+    });
+
+    // ============================================
+    // AUTO-GENERATE CODE FROM NAME (Add Modal)
+    // ============================================
+    document.querySelector('#addOrganizationModal input[name="organization_name"]')?.addEventListener('blur', function() {
+        const codeField = document.querySelector('#addOrganizationModal input[name="organization_code"]');
+        if (!codeField.value.trim() && this.value.trim()) {
+            const words = this.value.trim().toUpperCase().split(' ');
+            let code = '';
+            for (let i = 0; i < Math.min(words.length, 3); i++) {
+                code += words[i].charAt(0);
+            }
+            code += Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+            codeField.value = code;
+        }
+    });
+
+    // ============================================
+    // ESCAPE HTML HELPER
+    // ============================================
+    function escapeHtml(text) {
+        if (!text) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // ============================================
+    // AUTO-DISMISS ALERTS
+    // ============================================
+    setTimeout(() => {
+        document.querySelectorAll('.alert').forEach(alert => {
+            alert.style.transition = 'opacity 0.5s';
+            alert.style.opacity = '0';
+            setTimeout(() => alert.remove(), 500);
+        });
+    }, 5000);
+
+    // ============================================
+    // RESET MODAL ON HIDE
+    // ============================================
+    document.getElementById('addOrganizationModal')?.addEventListener('hidden.bs.modal', function() {
+        this.querySelector('form').reset();
+        this.querySelectorAll('.is-invalid').forEach(el => el.classList.remove('is-invalid'));
+    });
+
+})();
+</script>
 </body>
 </html>

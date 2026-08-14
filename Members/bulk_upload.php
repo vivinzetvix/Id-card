@@ -848,97 +848,68 @@ function attach_bulk_photo($pdo, $memberId, $photoReference, $photoUploads = [])
         return false;
     }
 
-    // Excel value:
-    // C:\Users\VIJIN\Downloads\1 (2).jpg
-    // becomes:
-    // 1 (2).jpg
     $reference = str_replace('\\', '/', $photoReference);
     $referenceFilename = basename($reference);
     $referenceFilename = trim($referenceFilename, "\"'");
     $referenceKey = strtolower($referenceFilename);
+    $referenceBase = pathinfo($referenceFilename, PATHINFO_FILENAME);
 
     $source = null;
     $extension = 'jpg';
 
-    // Find uploaded photo by original filename
+    // Pass 1: exact filename match (case-insensitive, with extension)
     foreach ($photoUploads['files'] as $photo) {
-
-        // Try matching by exact filename (case‑insensitive).
         $original = trim((string)($photo['original'] ?? ''));
         $original = str_replace('\\', '/', $original);
-        $originalFilename = basename($original);
-        $originalFilename = trim($originalFilename, "\"'");
+        $originalFilename = trim(basename($original), "\"'");
 
         if (strcasecmp($originalFilename, $referenceFilename) === 0 && !empty($photo['path']) && is_file($photo['path'])) {
             $source = $photo['path'];
             $extension = strtolower(pathinfo($originalFilename, PATHINFO_EXTENSION));
-          // If exact match fails, fall back to matching by filename without extension (case‑insensitive).
-        $referenceBase = pathinfo($referenceFilename, PATHINFO_FILENAME);
+            break;
+        }
+    }
+
+    // Pass 2: fallback — match by filename WITHOUT extension
+    if (!$source) {
         foreach ($photoUploads['files'] as $photo) {
             $original = trim((string)($photo['original'] ?? ''));
             $original = str_replace('\\', '/', $original);
-            $originalFilename = basename($original);
-            $originalFilename = trim($originalFilename, "\"'");
+            $originalFilename = trim(basename($original), "\"'");
             $originalBase = pathinfo($originalFilename, PATHINFO_FILENAME);
+
             if (strcasecmp($originalBase, $referenceBase) === 0 && !empty($photo['path']) && is_file($photo['path'])) {
                 $source = $photo['path'];
                 $extension = strtolower(pathinfo($originalFilename, PATHINFO_EXTENSION));
                 break;
             }
         }
-                break;
-            }
-        }
+    }
 
     if (!$source || !is_file($source)) {
         return false;
     }
 
-    if (!in_array(
-        $extension,
-        ['jpg', 'jpeg', 'png', 'gif', 'webp'],
-        true
-    )) {
+    if (!in_array($extension, ['jpg', 'jpeg', 'png', 'gif', 'webp'], true)) {
         $extension = 'jpg';
     }
 
-    // Same folder used by Add Member
     $uploadDir = __DIR__ . '/../images/uploads/';
-
     if (!is_dir($uploadDir)) {
         if (!mkdir($uploadDir, 0755, true) && !is_dir($uploadDir)) {
             return false;
         }
     }
 
-    $filename =
-        'member_' .
-        (int)$memberId .
-        '_' .
-        time() .
-        '_' .
-        bin2hex(random_bytes(4)) .
-        '.' .
-        $extension;
-
+    $filename = 'member_' . (int)$memberId . '_' . time() . '_' . bin2hex(random_bytes(4)) . '.' . $extension;
     $destination = $uploadDir . $filename;
 
-    // Copy photo permanently
     if (!copy($source, $destination)) {
         return false;
     }
 
-    // Save filename to DB
-    $stmt = $pdo->prepare(
-        "UPDATE id_members
-         SET photo = ?
-         WHERE id = ?"
-    );
-
-    $stmt->execute([
-        $filename,
-        (int)$memberId
-    ]);
+    $stmt = $pdo->prepare("UPDATE id_members SET photo = ? WHERE id = ?");
+    $stmt->execute([$filename, (int)$memberId]);
 
     return $stmt->rowCount() >= 0;
 }
